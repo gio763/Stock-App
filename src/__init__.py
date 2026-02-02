@@ -1,0 +1,1 @@
+# Stock App source package

@@ -1,0 +1,16 @@
+snowflake:
+  account: "QHB49910.us-east-1"
+  jwt_account_identifier: "WMG_DATALAB"
+  connector_account_identifier: "WMG-DATALAB"
+  user: "APP_WR_RESEARCH_USER"
+  warehouse: "WR_US_SANDBOX_WH_M"
+  database: "Sodatone"
+  schema: "Sodatone"
+  role: "ENT_OKTA_SNOWFLAKE_DATALAB_WRUS"
+  private_key_path_env_var: "SNOWFLAKE_PRIVATE_KEY_PATH"
+
+spotify:
+  client_id_env_var: "SPOTIFY_CLIENT_ID"
+  client_secret_env_var: "SPOTIFY_CLIENT_SECRET"
+  token_url: "https://accounts.spotify.com/api/token"
+  api_base_url: "https://api.spotify.com/v1"
