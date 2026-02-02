@@ -1061,42 +1061,32 @@ def render_deal_form(artist_id: str, artist_name: str, streaming_data: dict):
 
 def render_deal_results(result: DealAnalysisResult):
     """Render the deal analysis results."""
-    st.markdown('<div class="section-header">Deal Calc Recommendations</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">Deal Recommendations</div>', unsafe_allow_html=True)
 
-    # Payback recommendation
-    st.markdown("**18-Month Payback Target**")
-    col1, col2, col3 = st.columns(3)
+    # Two recommendation cards side by side
+    col1, col2 = st.columns(2)
+
+    # 18-Month Payback Target
     with col1:
-        st.markdown(f'''<div class="stat-card">
-            <div class="stat-label">Max Cost</div>
-            <div class="stat-value">${format_number(result.pricing.payback_max_cost)}</div>
-        </div>''', unsafe_allow_html=True)
-    with col2:
-        st.markdown(f'''<div class="stat-card">
-            <div class="stat-label">Advance</div>
-            <div class="stat-value">${format_number(result.pricing.payback_advance)}</div>
-        </div>''', unsafe_allow_html=True)
-    with col3:
+        st.markdown("**18-Month Payback Target**")
         irr_text = f"{result.pricing.payback_implied_irr*100:.1f}%" if result.pricing.payback_implied_irr else "N/A"
         st.markdown(f'''<div class="stat-card">
-            <div class="stat-label">Implied IRR</div>
-            <div class="stat-value">{irr_text}</div>
+            <div class="stat-label">Max Total Cost</div>
+            <div class="stat-value">${format_number(result.pricing.payback_max_cost)}</div>
+            <div class="stat-change-neutral">Advance: ${format_number(result.pricing.payback_advance)}</div>
+            <div class="stat-change-neutral">Marketing: ${format_number(result.pricing.payback_marketing)}</div>
+            <div class="stat-change-neutral">Implied IRR: {irr_text}</div>
         </div>''', unsafe_allow_html=True)
 
-    # IRR recommendations
-    st.markdown("**IRR Target Costs**")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown(f'''<div class="stat-card">
-            <div class="stat-label">10% IRR Cost</div>
-            <div class="stat-value">${format_number(result.pricing.irr_10_max_cost)}</div>
-            <div class="stat-change-neutral">Advance: ${format_number(result.pricing.irr_10_advance)}</div>
-        </div>''', unsafe_allow_html=True)
+    # 15% IRR Target
     with col2:
+        st.markdown("**15% IRR Target**")
+        marketing_15 = result.pricing.irr_15_max_cost - result.pricing.irr_15_advance
         st.markdown(f'''<div class="stat-card">
-            <div class="stat-label">15% IRR Cost</div>
+            <div class="stat-label">Max Total Cost</div>
             <div class="stat-value">${format_number(result.pricing.irr_15_max_cost)}</div>
             <div class="stat-change-neutral">Advance: ${format_number(result.pricing.irr_15_advance)}</div>
+            <div class="stat-change-neutral">Marketing: ${format_number(marketing_15)}</div>
         </div>''', unsafe_allow_html=True)
 
     # Cash flow chart
