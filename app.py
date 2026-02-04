@@ -336,20 +336,31 @@ def render_summary_page():
 
         for idx, artist in enumerate(tracked):
             metrics = metrics_dict.get(artist.sodatone_id)
-            if not metrics:
-                continue
 
-            weekly_streams = metrics.streaming.weekly_us_streams or 0
-            change = metrics.streaming.us_wow_change or 0
+            # Get display name - use metrics name if available, otherwise use stored name
+            display_name = metrics.name if metrics else artist.name
+
+            # Get metrics values or use defaults
+            if metrics:
+                weekly_streams = metrics.streaming.weekly_us_streams or 0
+                change = metrics.streaming.us_wow_change or 0
+                sf = metrics.social.spotify_followers or 0
+                sf_change, sf_dir = format_change(metrics.social.spotify_followers_change)
+                ig = metrics.social.instagram_followers or 0
+                ig_change, ig_dir = format_change(metrics.social.instagram_followers_change)
+                tt = metrics.social.tiktok_followers or 0
+                tt_change, tt_dir = format_change(metrics.social.tiktok_followers_change)
+            else:
+                # Defaults when metrics unavailable
+                weekly_streams = 0
+                change = 0
+                sf, ig, tt = 0, 0, 0
+                sf_change, sf_dir = "0%", "neutral"
+                ig_change, ig_dir = "0%", "neutral"
+                tt_change, tt_dir = "0%", "neutral"
+
             change_text, direction = format_change(change)
             is_positive = change >= 0
-
-            sf = metrics.social.spotify_followers or 0
-            sf_change, sf_dir = format_change(metrics.social.spotify_followers_change)
-            ig = metrics.social.instagram_followers or 0
-            ig_change, ig_dir = format_change(metrics.social.instagram_followers_change)
-            tt = metrics.social.tiktok_followers or 0
-            tt_change, tt_dir = format_change(metrics.social.tiktok_followers_change)
 
             sparkline_values = data_cache.get_sparkline_values(artist.sodatone_id, "us_streams")
             sparkline_svg = create_sparkline_svg(sparkline_values, is_positive, width=70, height=28)
@@ -361,7 +372,7 @@ def render_summary_page():
                 <div class="artist-card">
                     <div style="display: flex; justify-content: space-between; align-items: center; gap: 16px;">
                         <div style="flex: 1;">
-                            <div style="font-size: 17px; font-weight: 600; color: #ffffff;">{metrics.name}</div>
+                            <div style="font-size: 17px; font-weight: 600; color: #ffffff;">{display_name}</div>
                             <div style="font-size: 13px; color: #8e8e93;">{format_number(weekly_streams)} streams/wk</div>
                         </div>
                         <div style="display: flex; align-items: center; gap: 12px;">
@@ -382,7 +393,7 @@ def render_summary_page():
                 st.markdown(card_html, unsafe_allow_html=True)
 
                 # View button - click to go to detail page
-                if st.button(f"📊 View {metrics.name}", key=f"card_{idx}", use_container_width=True):
+                if st.button(f"📊 View {display_name}", key=f"card_{idx}", use_container_width=True):
                     st.session_state.selected_artist = artist.sodatone_id
                     st.session_state.selected_spotify_id = artist.spotify_id
                     st.session_state.page = "detail"
