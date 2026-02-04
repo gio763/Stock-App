@@ -61,7 +61,9 @@ class SnowflakeClient:
             return rows
         except Exception as e:
             logger.error("Artist search failed: %s", e)
-            return []
+            import traceback
+            traceback.print_exc()
+            raise  # Re-raise so UI can show the error
 
     def get_artist_metrics(self, artist_ids: List[str], fast: bool = True) -> Dict[str, ArtistMetrics]:
         """Fetch current metrics for the provided Sodatone artist IDs.

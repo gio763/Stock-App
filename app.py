@@ -311,8 +311,12 @@ def render_summary_page():
     with st.expander("➕ Add Artist"):
         add_query = st.text_input("Search for artist to add", placeholder="Enter artist name...", key="add_search")
         if add_query and len(add_query) >= 2:
-            with st.spinner("Searching..."):
-                results = snowflake_client.search_artists(add_query)
+            try:
+                with st.spinner("Searching..."):
+                    results = snowflake_client.search_artists(add_query)
+            except Exception as e:
+                st.error(f"Search failed: {e}")
+                results = []
             if results:
                 for result in results[:5]:
                     col1, col2 = st.columns([4, 1])
