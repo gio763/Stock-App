@@ -67,15 +67,20 @@ class SpotifyClient:
         return self._token
 
     def search_artist(self, query: str) -> Optional[ArtistSummary]:
-        """Search for an artist by name."""
+        """Search for an artist by name (returns first match)."""
+        results = self.search_artists(query, limit=1)
+        return results[0] if results else None
+
+    def search_artists(self, query: str, limit: int = 10) -> List[ArtistSummary]:
+        """Search for artists by name (returns multiple results)."""
         if not self.configured:
-            return None
+            return []
 
         token = self._get_access_token()
         headers = {"Authorization": f"Bearer {token}"}
 
         with httpx.Client(timeout=30.0) as client:
-            params = {"q": query, "type": "artist", "limit": 1}
+            params = {"q": query, "type": "artist", "limit": limit}
             response = client.get(
                 f"{settings.spotify.api_base_url}/search",
                 params=params,
@@ -84,15 +89,12 @@ class SpotifyClient:
 
         if response.status_code >= 400:
             logger.error("Spotify search failed: %s", response.text)
-            return None
+            return []
 
         data = response.json()
         artists = data.get("artists", {}).get("items", [])
 
-        if not artists:
-            return None
-
-        return self._to_summary(artists[0])
+        return [self._to_summary(a) for a in artists if a]
 
     def get_similar_artists(self, artist: ArtistSummary) -> List[ArtistSummary]:
         """Get similar artists for a given artist.

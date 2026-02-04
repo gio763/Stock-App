@@ -1,58 +1,55 @@
-"""Local storage for tracked artists using JSON file."""
+"""Storage for tracked artists using Streamlit session state.
+
+On Railway and other cloud platforms, the filesystem is ephemeral.
+Using session state ensures data persists within the user's session.
+"""
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime
-from pathlib import Path
 from typing import List, Optional
+
+import streamlit as st
 
 from .models import TrackedArtist
 
 logger = logging.getLogger(__name__)
 
-# Default data file path
-DATA_DIR = Path(__file__).parent.parent / "data"
-TRACKED_ARTISTS_FILE = DATA_DIR / "tracked_artists.json"
+# Session state key for tracked artists
+TRACKED_ARTISTS_KEY = "tracked_artists_list"
 
 
-def _ensure_data_dir() -> None:
-    """Ensure data directory exists."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+def _get_tracked_artists_list() -> List[dict]:
+    """Get the tracked artists list from session state."""
+    if TRACKED_ARTISTS_KEY not in st.session_state:
+        st.session_state[TRACKED_ARTISTS_KEY] = []
+    return st.session_state[TRACKED_ARTISTS_KEY]
+
+
+def _set_tracked_artists_list(artists: List[dict]) -> None:
+    """Set the tracked artists list in session state."""
+    st.session_state[TRACKED_ARTISTS_KEY] = artists
 
 
 def load_tracked_artists() -> List[TrackedArtist]:
-    """Load tracked artists from JSON file."""
-    _ensure_data_dir()
+    """Load tracked artists from session state."""
+    data = _get_tracked_artists_list()
 
-    if not TRACKED_ARTISTS_FILE.exists():
-        return []
-
-    try:
-        with TRACKED_ARTISTS_FILE.open("r") as f:
-            data = json.load(f)
-
-        artists = []
-        for item in data:
-            artists.append(TrackedArtist(
-                sodatone_id=item.get("sodatone_id", ""),
-                name=item.get("name", ""),
-                spotify_id=item.get("spotify_id"),
-                image_url=item.get("image_url"),
-                added_at=item.get("added_at"),
-            ))
-        return artists
-
-    except Exception as e:
-        logger.error("Failed to load tracked artists: %s", e)
-        return []
+    artists = []
+    for item in data:
+        artists.append(TrackedArtist(
+            sodatone_id=item.get("sodatone_id", ""),
+            name=item.get("name", ""),
+            spotify_id=item.get("spotify_id"),
+            image_url=item.get("image_url"),
+            added_at=item.get("added_at"),
+        ))
+    return artists
 
 
 def save_tracked_artists(artists: List[TrackedArtist]) -> bool:
-    """Save tracked artists to JSON file."""
-    _ensure_data_dir()
-
+    """Save tracked artists to session state."""
     try:
         data = []
         for artist in artists:
@@ -63,12 +60,8 @@ def save_tracked_artists(artists: List[TrackedArtist]) -> bool:
                 "image_url": artist.image_url,
                 "added_at": artist.added_at,
             })
-
-        with TRACKED_ARTISTS_FILE.open("w") as f:
-            json.dump(data, f, indent=2)
-
+        _set_tracked_artists_list(data)
         return True
-
     except Exception as e:
         logger.error("Failed to save tracked artists: %s", e)
         return False

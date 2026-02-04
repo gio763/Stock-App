@@ -311,23 +311,41 @@ def render_summary_page():
     with st.expander("➕ Add Artist"):
         add_query = st.text_input("Search for artist to add", placeholder="Enter artist name...", key="add_search")
         if add_query and len(add_query) >= 2:
+            # Search Spotify first for artist names
             try:
-                with st.spinner("Searching..."):
-                    results = snowflake_client.search_artists(add_query)
+                with st.spinner("Searching Spotify..."):
+                    spotify_results = spotify_client.search_artists(add_query, limit=8)
             except Exception as e:
-                st.error(f"Search failed: {e}")
-                results = []
-            if results:
-                for result in results[:5]:
+                st.error(f"Spotify search failed: {e}")
+                spotify_results = []
+
+            if spotify_results:
+                for i, result in enumerate(spotify_results[:5]):
                     col1, col2 = st.columns([4, 1])
                     with col1:
-                        st.write(f"**{result.get('ARTIST_NAME', 'Unknown')}**")
+                        st.write(f"**{result.name}**")
                     with col2:
-                        sodatone_id = str(result.get('SODATONE_ID', ''))
-                        if sodatone_id and st.button("Add", key=f"add_{sodatone_id}"):
-                            add_tracked_artist(sodatone_id=sodatone_id, name=result.get('ARTIST_NAME', 'Unknown'), spotify_id=result.get('SPOTIFY_ID'))
-                            refresh_artist_data(sodatone_id, force=True)
-                            st.rerun()
+                        if result.spotify_id and st.button("Add", key=f"add_spotify_{i}_{result.spotify_id}"):
+                            # Lookup sodatone_id from Snowflake using spotify_id
+                            with st.spinner("Loading artist data..."):
+                                try:
+                                    mapping = snowflake_client.lookup_sodatone_ids([result.spotify_id])
+                                    sodatone_id = mapping.get(result.spotify_id)
+                                    if sodatone_id:
+                                        add_tracked_artist(
+                                            sodatone_id=sodatone_id,
+                                            name=result.name,
+                                            spotify_id=result.spotify_id,
+                                            image_url=result.image_url
+                                        )
+                                        refresh_artist_data(sodatone_id, force=True)
+                                        st.rerun()
+                                    else:
+                                        st.error(f"Artist '{result.name}' not found in database")
+                                except Exception as e:
+                                    st.error(f"Failed to add artist: {e}")
+            elif add_query:
+                st.caption("No artists found on Spotify")
 
     st.markdown("---")
 
