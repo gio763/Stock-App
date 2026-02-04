@@ -380,10 +380,50 @@ class SnowflakeClient:
             conn.close()
 
     def _load_private_key(self):
-        """Load RSA private key from environment-specified path."""
+        """Load RSA private key from environment variable or file.
+
+        Supports (checked in order):
+        1. SNOWFLAKE_PRIVATE_KEY_B64 - base64-encoded key (recommended for cloud)
+        2. SNOWFLAKE_PRIVATE_KEY - key content directly
+        3. SNOWFLAKE_PRIVATE_KEY_PATH - path to key file (local dev)
+        """
+        # Try base64-encoded key first (best for cloud - no newline issues)
+        key_b64 = os.environ.get("SNOWFLAKE_PRIVATE_KEY_B64")
+        if key_b64:
+            logger.info("Loading private key from SNOWFLAKE_PRIVATE_KEY_B64")
+            try:
+                key_content = base64.b64decode(key_b64).decode("utf-8")
+                return serialization.load_pem_private_key(
+                    key_content.encode(),
+                    password=None,
+                    backend=default_backend(),
+                )
+            except Exception as e:
+                logger.error("Failed to decode base64 key: %s", e)
+                raise RuntimeError(f"Invalid base64 key: {e}")
+
+        # Try direct key content
+        key_content = os.environ.get("SNOWFLAKE_PRIVATE_KEY")
+        if key_content:
+            logger.info("Loading private key from SNOWFLAKE_PRIVATE_KEY")
+            key_content = key_content.replace("\\n", "\n")
+            try:
+                return serialization.load_pem_private_key(
+                    key_content.encode(),
+                    password=None,
+                    backend=default_backend(),
+                )
+            except Exception as e:
+                logger.error("Failed to parse key: %s", e)
+                raise RuntimeError(f"Invalid key content: {e}")
+
+        # Fall back to file path
         key_path_str = os.environ.get(self._config.private_key_path_env_var)
         if not key_path_str:
-            raise RuntimeError(f"Environment variable '{self._config.private_key_path_env_var}' is not set.")
+            raise RuntimeError(
+                "Set SNOWFLAKE_PRIVATE_KEY_B64, SNOWFLAKE_PRIVATE_KEY, or "
+                f"'{self._config.private_key_path_env_var}'"
+            )
 
         key_path = Path(key_path_str).expanduser()
         if not key_path.exists():
