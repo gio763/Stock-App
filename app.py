@@ -466,7 +466,7 @@ def render_summary_page():
                     break
 
             if sound_id:
-                col1, col2, col3 = st.columns([2, 1, 1])
+                col1, col2 = st.columns([3, 1])
                 with col1:
                     st.success(f"Sound ID: {sound_id}")
                 with col2:
@@ -474,25 +474,6 @@ def render_summary_page():
                         name = sound_name if sound_name else f"TikTok Sound {sound_id[-8:]}"
                         add_tracked_sound(sound_id=sound_id, name=name)
                         st.rerun()
-                with col3:
-                    if st.button("Test API", key="test_api_btn"):
-                        import httpx
-                        from src.config import settings
-
-                        app_id = settings.chartex.app_id or "NOT SET"
-                        app_token = settings.chartex.app_token or "NOT SET"
-                        headers = {"X-APP-ID": app_id, "X-APP-TOKEN": app_token, "Accept": "application/json"}
-
-                        # Test the sound stats endpoint
-                        url = f"https://api.chartex.com/external/v1/tiktok-sounds/{sound_id}/stats/tiktok-video-views/?mode=daily&limit_by_latest_days=3"
-                        try:
-                            with httpx.Client(timeout=15.0, follow_redirects=True) as client:
-                                resp = client.get(url, headers=headers)
-                            st.code(f"""API Test for Sound {sound_id}
-Status: {resp.status_code}
-Response: {resp.text[:300]}""")
-                        except Exception as e:
-                            st.error(f"Error: {e}")
             else:
                 st.error("Could not extract sound ID.")
 
@@ -985,15 +966,6 @@ def create_deal_chart(result: DealAnalysisResult, height=350):
     return fig
 
 
-@st.cache_data(ttl=600, show_spinner=False)
-def get_catalog_track_count_cached(artist_id: str) -> int:
-    """Fetch catalog track count from Snowflake (cached)."""
-    try:
-        return snowflake_client.get_catalog_track_count(artist_id)
-    except:
-        return 0
-
-
 # Available markets for deal analysis (common markets with PPU data)
 AVAILABLE_MARKETS = [
     "USA", "UK", "GERMANY", "FRANCE", "CANADA", "AUSTRALIA", "JAPAN",
@@ -1015,8 +987,15 @@ def render_deal_form(artist_id: str, artist_name: str, streaming_data: dict):
     weekly_audio = sum(p.value for p in us_streams[-7:]) if us_streams else 0
     weekly_video = sum(p.value for p in us_video[-7:]) if us_video else 0
 
-    # Auto-fetch catalog track count
-    catalog_tracks_auto = get_catalog_track_count_cached(artist_id)
+    # Get catalog track count from Snowflake
+    try:
+        catalog_tracks = snowflake_client.get_catalog_track_count(artist_id)
+    except:
+        catalog_tracks = 0
+    catalog_tracks = max(catalog_tracks, 1)
+
+    # Fixed discount rate
+    discount_rate = 0.075
 
     # Analysis mode selector (outside form for dynamic updates)
     analysis_mode = st.radio(
@@ -1037,13 +1016,6 @@ def render_deal_form(artist_id: str, artist_name: str, streaming_data: dict):
                 index=0,
                 help="Select the genre for decay curve"
             )
-            weeks_post_peak = st.number_input(
-                "Weeks Post-Peak",
-                min_value=0,
-                max_value=520,
-                value=0,
-                help="Weeks since peak - accounts for decay already happened"
-            )
             deal_type = st.selectbox(
                 "Deal Type",
                 options=["distribution", "profit_split", "royalty"],
@@ -1059,14 +1031,7 @@ def render_deal_form(artist_id: str, artist_name: str, streaming_data: dict):
             ) / 100.0
 
         with col2:
-            # Show auto-detected track count with option to override
-            catalog_tracks = st.number_input(
-                "Catalog Track Count",
-                min_value=1,
-                max_value=5000,
-                value=max(catalog_tracks_auto, 1),
-                help=f"Auto-detected: {catalog_tracks_auto} tracks"
-            )
+            st.markdown(f"**Catalog Tracks:** {catalog_tracks}")
             extra_tracks = st.number_input(
                 "New Songs Owed",
                 min_value=0,
@@ -1079,13 +1044,6 @@ def render_deal_form(artist_id: str, artist_name: str, streaming_data: dict):
                 value=False,
                 help="Whether marketing costs are recoupable"
             )
-            discount_rate = st.number_input(
-                "Discount Rate %",
-                min_value=5,
-                max_value=25,
-                value=10,
-                help="Discount rate for NPV calculations"
-            ) / 100.0
 
         # Conditional inputs based on analysis mode
         if analysis_mode == "Analyze Specific Deal":
@@ -1121,18 +1079,6 @@ def render_deal_form(artist_id: str, artist_name: str, streaming_data: dict):
             ) / 100.0
             input_advance = 0
             input_marketing = 0
-
-        # Track-level decay option
-        st.markdown("**Decay Mode**")
-        use_track_level_decay = st.checkbox(
-            "Use Track-Level Decay",
-            value=True,
-            help="Decay each track individually based on release date (recommended). If disabled, uses aggregate decay."
-        )
-        if use_track_level_decay:
-            st.caption(f"Track data will be fetched from Snowflake. Each track decays based on its release date.")
-        else:
-            st.caption(f"All {catalog_tracks} tracks will decay uniformly from weeks post-peak.")
 
         st.markdown("**Market Shares** (select up to 5 markets)")
 
@@ -1198,7 +1144,7 @@ def render_deal_form(artist_id: str, artist_name: str, streaming_data: dict):
             return {
                 "analysis_mode": analysis_mode,
                 "genre": genre,
-                "weeks_post_peak": weeks_post_peak,
+                "weeks_post_peak": 0,  # Always 0 - using track-level decay
                 "deal_type": deal_type,
                 "deal_percent": deal_percent,
                 "catalog_tracks": catalog_tracks,
@@ -1208,7 +1154,7 @@ def render_deal_form(artist_id: str, artist_name: str, streaming_data: dict):
                 "market_shares": market_shares,
                 "weekly_audio": weekly_audio,
                 "weekly_video": weekly_video,
-                "use_track_level_decay": use_track_level_decay,
+                "use_track_level_decay": True,  # Always use track-level decay
                 "discount_rate": discount_rate,
                 # Viability mode specific
                 "input_advance": input_advance,
