@@ -524,6 +524,7 @@ class DealAnalyzer:
 
         # Determine analysis mode and compute revenues
         use_track_level = request.use_track_level_decay and weekly_rates is not None
+        year1_total = None  # Will be set if track-level computation succeeds
 
         if use_track_level:
             # Fetch track data if not provided
@@ -581,6 +582,9 @@ class DealAnalyzer:
         )
 
         # Build deal inputs
+        # For track-level mode, pass the pre-computed Year 1 revenue
+        year1_override = year1_total if (use_track_level and year1_total is not None and year1_total > 0) else None
+
         deal_inputs = DealInputs(
             genre=request.genre,
             weekly_audio=effective_weekly_audio,
@@ -594,6 +598,7 @@ class DealAnalyzer:
             advance_share=request.advance_share,
             decay_mode="annual",  # Use annual mode since we've already computed the multipliers
             weeks_post_peak=0 if use_track_level else request.weeks_post_peak,  # Already handled in track-level
+            year1_revenue_override=year1_override,  # Pass actual Year 1 revenue from track-level
         )
 
         # Run pricer analysis

@@ -49,6 +49,10 @@ class DealInputs:
     # See pricer/decay_curve.py for full explanation.
     weeks_post_peak: int = 0
 
+    # Optional: Pre-computed Year 1 revenue (for track-level decay mode)
+    # When set, this overrides the calculation from weekly streams
+    year1_revenue_override: Optional[float] = None
+
 
 @dataclass
 class RateInputs:
@@ -630,12 +634,26 @@ def analyze_deal(
         # gross_revenue[y] = year1_revenue * multiplier[y]
         # NO compounding! The multipliers are already cumulative.
 
-        # Base annualized revenue (Year 1, before decay)
-        base_annual_audio_rev = eff_weekly_audio * 52 * rate_inputs.blended_audio_rate
-        base_annual_video_rev = eff_weekly_video * 52 * rate_inputs.video_rate
-        year1_total_rev = base_annual_audio_rev + base_annual_video_rev
-        year1_audio_rev = base_annual_audio_rev
-        year1_video_rev = base_annual_video_rev
+        # Check if Year 1 revenue is pre-computed (e.g., from track-level decay)
+        if inputs.year1_revenue_override is not None and inputs.year1_revenue_override > 0:
+            # Use pre-computed Year 1 revenue from track-level calculation
+            year1_total_rev = inputs.year1_revenue_override
+            # Estimate audio/video split based on stream proportions
+            total_streams = eff_weekly_audio + eff_weekly_video
+            if total_streams > 0:
+                audio_ratio = eff_weekly_audio / total_streams
+                year1_audio_rev = year1_total_rev * audio_ratio
+                year1_video_rev = year1_total_rev * (1 - audio_ratio)
+            else:
+                year1_audio_rev = year1_total_rev
+                year1_video_rev = 0.0
+        else:
+            # Base annualized revenue (Year 1, before decay)
+            base_annual_audio_rev = eff_weekly_audio * 52 * rate_inputs.blended_audio_rate
+            base_annual_video_rev = eff_weekly_video * 52 * rate_inputs.video_rate
+            year1_total_rev = base_annual_audio_rev + base_annual_video_rev
+            year1_audio_rev = base_annual_audio_rev
+            year1_video_rev = base_annual_video_rev
 
         engine = CashFlowEngine(
             year1_total_rev=year1_total_rev,
