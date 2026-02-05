@@ -476,20 +476,24 @@ def render_summary_page():
                         st.rerun()
                 with col3:
                     if st.button("Test API", key="test_api_btn"):
-                        # Test by listing tracked sounds to see actual IDs
+                        # Test different base URLs
                         import httpx
                         from src.config import settings
-                        try:
-                            url = "https://chartex.com/external/v1/tiktok-sounds/"
-                            headers = {
-                                "X-APP-ID": settings.chartex.app_id or "NOT SET",
-                                "X-APP-TOKEN": settings.chartex.app_token or "NOT SET",
-                            }
-                            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
-                                resp = client.get(url, headers=headers, params={"limit": 10})
-                            st.code(f"Tracked Sounds:\n{resp.text[:1500]}")
-                        except Exception as e:
-                            st.error(f"API Test Error: {e}")
+                        results = []
+                        app_id = settings.chartex.app_id or "NOT SET"
+                        app_token = settings.chartex.app_token or "NOT SET"
+
+                        for base in ["https://chartex.com", "https://api.chartex.com"]:
+                            url = f"{base}/external/v1/tiktok-sounds/"
+                            headers = {"X-APP-ID": app_id, "X-APP-TOKEN": app_token}
+                            try:
+                                with httpx.Client(timeout=15.0, follow_redirects=True) as client:
+                                    resp = client.get(url, headers=headers, params={"limit": 5})
+                                results.append(f"{base}: {resp.status_code}\n{resp.text[:300]}\n")
+                            except Exception as e:
+                                results.append(f"{base}: ERROR - {e}\n")
+
+                        st.code(f"App ID: {app_id[:8]}...\n\n" + "\n".join(results))
             else:
                 st.error("Could not extract sound ID.")
 
