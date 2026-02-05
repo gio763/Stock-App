@@ -570,34 +570,78 @@ def compute_irr_recommendation(
             cost_mid = (cost_low + cost_high) / 2
 
             if deal_type == DealType.ROYALTY:
-                # ROYALTY: Label gets fixed % of gross forever, NO recoupment
-                # Label CF = Gross × Royalty% (deal_pct is the royalty rate)
-                # Advance is just Year 0 outflow
-                actual_cf = [gross_y * deal_pct for gross_y in annual_gross]
-
-            elif deal_type == DealType.PROFIT_SPLIT:
-                # PROFIT SPLIT: Expenses PERMANENTLY reduce value
-                # Net = Gross - Expenses, Label CF = Net × Split%
-                actual_cf = []
-                for gross_y in annual_gross:
-                    expense_y = cost_mid * (gross_y / total_gross) if total_gross > 0 else 0
-                    net_profit_y = max(0, gross_y - expense_y)
-                    label_cf_y = net_profit_y * deal_pct
-                    actual_cf.append(label_cf_y)
-
-            else:  # DISTRIBUTION (Funded Distribution)
-                # FUNDED DISTRIBUTION: 100% during recoup, then split%
-                # Label gets ALL gross until recouped, then post-recoup share
+                # FUNDED ROYALTY: Label keeps 100% during recoup, then their share
+                # - Label's share (e.g., 80%) always goes to label
+                # - Artist's royalty (e.g., 20%) withheld during recoup
+                # - Recoupment happens at artist's royalty rate
+                artist_royalty_rate = 1.0 - deal_pct  # e.g., 20%
                 actual_cf = []
                 unrecouped = cost_mid
                 for gross_y in annual_gross:
-                    if unrecouped > 0:
-                        # Still recouping: Label gets 100%
+                    label_base = gross_y * deal_pct  # Label's share (80%)
+                    artist_royalty = gross_y * artist_royalty_rate  # Artist's share (20%)
+
+                    if unrecouped <= 0:
+                        # Recouped: Label gets their share only
+                        label_cf_y = label_base
+                    elif artist_royalty <= unrecouped:
+                        # Full artist royalty goes to recoup
+                        unrecouped -= artist_royalty
+                        label_cf_y = label_base + artist_royalty  # 100%
+                    else:
+                        # Mid-year recoup
+                        label_cf_y = label_base + unrecouped
+                        unrecouped = 0.0
+
+                    actual_cf.append(label_cf_y)
+
+            elif deal_type == DealType.PROFIT_SPLIT:
+                # PROFIT SPLIT: Expenses reduce gross to net, THEN recoup from net
+                # 1. Net = Gross - Expenses (allocated proportionally)
+                # 2. Label gets 100% of net until recouped
+                # 3. After recoup: Split net according to deal terms
+                actual_cf = []
+                unrecouped = cost_mid
+                for gross_y in annual_gross:
+                    expense_y = cost_mid * (gross_y / total_gross) if total_gross > 0 else 0
+                    net_y = max(0, gross_y - expense_y)
+
+                    if unrecouped <= 0:
+                        # Already recouped: Split net
+                        label_cf_y = net_y * deal_pct
+                    elif net_y <= unrecouped:
+                        # Full year's net goes to recoup
+                        unrecouped -= net_y
+                        label_cf_y = net_y
+                    else:
+                        # Mid-year recoup: take what's needed, split remainder
+                        recoup_portion = unrecouped
+                        remainder = net_y - unrecouped
+                        unrecouped = 0.0
+                        label_cf_y = recoup_portion + (remainder * deal_pct)
+
+                    actual_cf.append(label_cf_y)
+
+            else:  # DISTRIBUTION (Funded Distribution)
+                # FUNDED DISTRIBUTION: 100% of gross during recoup, then split%
+                # Handles mid-year recoupment properly
+                actual_cf = []
+                unrecouped = cost_mid
+                for gross_y in annual_gross:
+                    if unrecouped <= 0:
+                        # Already recouped: Split gross
+                        label_cf_y = gross_y * deal_pct
+                    elif gross_y <= unrecouped:
+                        # Full year goes to recoup
                         unrecouped -= gross_y
                         label_cf_y = gross_y
                     else:
-                        # Post-recoup: Label gets their share
-                        label_cf_y = gross_y * deal_pct
+                        # Mid-year recoup: take what's needed, split remainder
+                        recoup_portion = unrecouped
+                        remainder = gross_y - unrecouped
+                        unrecouped = 0.0
+                        label_cf_y = recoup_portion + (remainder * deal_pct)
+
                     actual_cf.append(label_cf_y)
 
             # Calculate IRR at this cost
