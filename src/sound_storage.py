@@ -1,4 +1,4 @@
-"""Storage for tracked TikTok sounds using Streamlit session state."""
+"""Storage for tracked TikTok sounds using PostgreSQL with session state cache."""
 
 from __future__ import annotations
 
@@ -9,29 +9,49 @@ from typing import List, Optional
 import streamlit as st
 
 from .models import TrackedSound
+from .db import (
+    load_tracked_sounds_db,
+    add_tracked_sound_db,
+    remove_tracked_sound_db,
+)
 
 logger = logging.getLogger(__name__)
 
-# Session state key for tracked sounds
+# Session state keys
 TRACKED_SOUNDS_KEY = "tracked_sounds_list"
+SOUNDS_LOADED_KEY = "tracked_sounds_loaded_from_db"
 
 
-def _get_tracked_sounds_list() -> List[dict]:
-    """Get the tracked sounds list from session state."""
-    if TRACKED_SOUNDS_KEY not in st.session_state:
-        st.session_state[TRACKED_SOUNDS_KEY] = []
-    return st.session_state[TRACKED_SOUNDS_KEY]
-
-
-def _set_tracked_sounds_list(sounds: List[dict]) -> None:
-    """Set the tracked sounds list in session state."""
-    st.session_state[TRACKED_SOUNDS_KEY] = sounds
+def _sync_session_state(sounds: List[TrackedSound]) -> None:
+    """Sync sounds to session state cache."""
+    data = []
+    for sound in sounds:
+        data.append({
+            "sound_id": sound.sound_id,
+            "name": sound.name,
+            "artist_name": sound.artist_name,
+            "tiktok_url": sound.tiktok_url,
+            "added_at": sound.added_at,
+        })
+    st.session_state[TRACKED_SOUNDS_KEY] = data
 
 
 def load_tracked_sounds() -> List[TrackedSound]:
-    """Load tracked sounds from session state."""
-    data = _get_tracked_sounds_list()
+    """Load tracked sounds from database (with session state cache)."""
+    # On first load of session, fetch from database
+    if not st.session_state.get(SOUNDS_LOADED_KEY, False):
+        db_sounds = load_tracked_sounds_db()
+        if db_sounds:
+            _sync_session_state(db_sounds)
+            st.session_state[SOUNDS_LOADED_KEY] = True
+            return db_sounds
+        st.session_state[SOUNDS_LOADED_KEY] = True
 
+    # Return from session state cache
+    if TRACKED_SOUNDS_KEY not in st.session_state:
+        st.session_state[TRACKED_SOUNDS_KEY] = []
+
+    data = st.session_state[TRACKED_SOUNDS_KEY]
     sounds = []
     for item in data:
         sounds.append(TrackedSound(
@@ -44,32 +64,13 @@ def load_tracked_sounds() -> List[TrackedSound]:
     return sounds
 
 
-def save_tracked_sounds(sounds: List[TrackedSound]) -> bool:
-    """Save tracked sounds to session state."""
-    try:
-        data = []
-        for sound in sounds:
-            data.append({
-                "sound_id": sound.sound_id,
-                "name": sound.name,
-                "artist_name": sound.artist_name,
-                "tiktok_url": sound.tiktok_url,
-                "added_at": sound.added_at,
-            })
-        _set_tracked_sounds_list(data)
-        return True
-    except Exception as e:
-        logger.error("Failed to save tracked sounds: %s", e)
-        return False
-
-
 def add_tracked_sound(
     sound_id: str,
     name: str,
     artist_name: Optional[str] = None,
     tiktok_url: Optional[str] = None,
 ) -> bool:
-    """Add a new tracked sound."""
+    """Add a new tracked sound to database and session cache."""
     sounds = load_tracked_sounds()
 
     # Check if already tracked
@@ -78,21 +79,28 @@ def add_tracked_sound(
             logger.info("Sound %s already tracked.", sound_id)
             return True
 
-    # Add new sound
+    # Add to database first
+    final_url = tiktok_url or f"https://www.tiktok.com/music/original-sound-{sound_id}"
+    db_success = add_tracked_sound_db(sound_id, name, artist_name, final_url)
+    if not db_success:
+        logger.warning("Failed to add sound to database, using session state only")
+
+    # Add to session state cache
     new_sound = TrackedSound(
         sound_id=sound_id,
         name=name,
         artist_name=artist_name,
-        tiktok_url=tiktok_url or f"https://www.tiktok.com/music/original-sound-{sound_id}",
+        tiktok_url=final_url,
         added_at=datetime.now().isoformat(),
     )
     sounds.append(new_sound)
+    _sync_session_state(sounds)
 
-    return save_tracked_sounds(sounds)
+    return True
 
 
 def remove_tracked_sound(sound_id: str) -> bool:
-    """Remove a tracked sound."""
+    """Remove a tracked sound from database and session cache."""
     sounds = load_tracked_sounds()
     original_count = len(sounds)
 
@@ -102,7 +110,14 @@ def remove_tracked_sound(sound_id: str) -> bool:
         logger.info("Sound %s not found in tracked list.", sound_id)
         return True
 
-    return save_tracked_sounds(sounds)
+    # Remove from database
+    db_success = remove_tracked_sound_db(sound_id)
+    if not db_success:
+        logger.warning("Failed to remove sound from database")
+
+    # Update session state cache
+    _sync_session_state(sounds)
+    return True
 
 
 def get_tracked_sound_ids() -> List[str]:

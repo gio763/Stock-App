@@ -1,7 +1,7 @@
-"""Storage for tracked artists using Streamlit session state.
+"""Storage for tracked artists using PostgreSQL with session state cache.
 
-On Railway and other cloud platforms, the filesystem is ephemeral.
-Using session state ensures data persists within the user's session.
+Uses PostgreSQL for persistent storage across sessions/tabs.
+Session state is used as a cache within the current session.
 """
 
 from __future__ import annotations
@@ -13,29 +13,49 @@ from typing import List, Optional
 import streamlit as st
 
 from .models import TrackedArtist
+from .db import (
+    load_tracked_artists_db,
+    add_tracked_artist_db,
+    remove_tracked_artist_db,
+)
 
 logger = logging.getLogger(__name__)
 
-# Session state key for tracked artists
+# Session state key for tracked artists cache
 TRACKED_ARTISTS_KEY = "tracked_artists_list"
+ARTISTS_LOADED_KEY = "tracked_artists_loaded_from_db"
 
 
-def _get_tracked_artists_list() -> List[dict]:
-    """Get the tracked artists list from session state."""
-    if TRACKED_ARTISTS_KEY not in st.session_state:
-        st.session_state[TRACKED_ARTISTS_KEY] = []
-    return st.session_state[TRACKED_ARTISTS_KEY]
-
-
-def _set_tracked_artists_list(artists: List[dict]) -> None:
-    """Set the tracked artists list in session state."""
-    st.session_state[TRACKED_ARTISTS_KEY] = artists
+def _sync_session_state(artists: List[TrackedArtist]) -> None:
+    """Sync artists to session state cache."""
+    data = []
+    for artist in artists:
+        data.append({
+            "sodatone_id": artist.sodatone_id,
+            "name": artist.name,
+            "spotify_id": artist.spotify_id,
+            "image_url": artist.image_url,
+            "added_at": artist.added_at,
+        })
+    st.session_state[TRACKED_ARTISTS_KEY] = data
 
 
 def load_tracked_artists() -> List[TrackedArtist]:
-    """Load tracked artists from session state."""
-    data = _get_tracked_artists_list()
+    """Load tracked artists from database (with session state cache)."""
+    # On first load of session, fetch from database
+    if not st.session_state.get(ARTISTS_LOADED_KEY, False):
+        db_artists = load_tracked_artists_db()
+        if db_artists:
+            _sync_session_state(db_artists)
+            st.session_state[ARTISTS_LOADED_KEY] = True
+            return db_artists
+        st.session_state[ARTISTS_LOADED_KEY] = True
 
+    # Return from session state cache
+    if TRACKED_ARTISTS_KEY not in st.session_state:
+        st.session_state[TRACKED_ARTISTS_KEY] = []
+
+    data = st.session_state[TRACKED_ARTISTS_KEY]
     artists = []
     for item in data:
         artists.append(TrackedArtist(
@@ -48,32 +68,13 @@ def load_tracked_artists() -> List[TrackedArtist]:
     return artists
 
 
-def save_tracked_artists(artists: List[TrackedArtist]) -> bool:
-    """Save tracked artists to session state."""
-    try:
-        data = []
-        for artist in artists:
-            data.append({
-                "sodatone_id": artist.sodatone_id,
-                "name": artist.name,
-                "spotify_id": artist.spotify_id,
-                "image_url": artist.image_url,
-                "added_at": artist.added_at,
-            })
-        _set_tracked_artists_list(data)
-        return True
-    except Exception as e:
-        logger.error("Failed to save tracked artists: %s", e)
-        return False
-
-
 def add_tracked_artist(
     sodatone_id: str,
     name: str,
     spotify_id: Optional[str] = None,
     image_url: Optional[str] = None,
 ) -> bool:
-    """Add a new tracked artist."""
+    """Add a new tracked artist to database and session cache."""
     artists = load_tracked_artists()
 
     # Check if already tracked
@@ -82,7 +83,12 @@ def add_tracked_artist(
             logger.info("Artist %s already tracked.", sodatone_id)
             return True
 
-    # Add new artist
+    # Add to database first
+    db_success = add_tracked_artist_db(sodatone_id, name, spotify_id, image_url)
+    if not db_success:
+        logger.warning("Failed to add artist to database, using session state only")
+
+    # Add to session state cache
     new_artist = TrackedArtist(
         sodatone_id=sodatone_id,
         name=name,
@@ -91,12 +97,13 @@ def add_tracked_artist(
         added_at=datetime.now().isoformat(),
     )
     artists.append(new_artist)
+    _sync_session_state(artists)
 
-    return save_tracked_artists(artists)
+    return True
 
 
 def remove_tracked_artist(sodatone_id: str) -> bool:
-    """Remove a tracked artist."""
+    """Remove a tracked artist from database and session cache."""
     artists = load_tracked_artists()
     original_count = len(artists)
 
@@ -106,7 +113,14 @@ def remove_tracked_artist(sodatone_id: str) -> bool:
         logger.info("Artist %s not found in tracked list.", sodatone_id)
         return True
 
-    return save_tracked_artists(artists)
+    # Remove from database
+    db_success = remove_tracked_artist_db(sodatone_id)
+    if not db_success:
+        logger.warning("Failed to remove artist from database")
+
+    # Update session state cache
+    _sync_session_state(artists)
+    return True
 
 
 def get_tracked_artist_ids() -> List[str]:

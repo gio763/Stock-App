@@ -35,6 +35,10 @@ from src.deal_storage import (
 )
 from src.chartex_client import chartex_client
 from src.sound_storage import load_tracked_sounds, add_tracked_sound, remove_tracked_sound
+from src.db import init_db
+
+# Initialize database tables on startup
+init_db()
 
 st.set_page_config(page_title="Artist Stock App", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 
