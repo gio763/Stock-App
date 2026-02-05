@@ -7,11 +7,20 @@ from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional
 
 import httpx
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from .config import settings
 from .models import TikTokSound, TimeSeriesPoint
 
 logger = logging.getLogger(__name__)
+
+# Retry decorator for transient failures
+_retry_on_network_error = retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type((httpx.RequestError, httpx.TimeoutException)),
+    reraise=True,
+)
 
 
 class ChartexAPIError(RuntimeError):
@@ -45,6 +54,12 @@ class ChartexClient:
             "X-APP-TOKEN": app_token,
             "Accept": "application/json",
         }
+
+    @_retry_on_network_error
+    def _make_request(self, url: str, params: dict) -> httpx.Response:
+        """Make HTTP request with retry logic for transient failures."""
+        with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+            return client.get(url, headers=self._get_headers(), params=params)
 
     def get_sound_views(
         self,
@@ -81,8 +96,7 @@ class ChartexClient:
             params["limit_by_latest_days"] = limit_days
 
         try:
-            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
-                response = client.get(url, headers=self._get_headers(), params=params)
+            response = self._make_request(url, params)
 
             logger.info("Chartex views API: %s %s - %s", response.status_code, url, response.text[:300] if response.text else "empty")
 
@@ -109,8 +123,8 @@ class ChartexClient:
             data = response.json()
             return self._parse_time_series(data, metric="views")
 
-        except httpx.RequestError as e:
-            logger.error("Chartex request failed: %s", e)
+        except (httpx.RequestError, httpx.TimeoutException) as e:
+            logger.error("Chartex request failed after retries: %s", e)
             return []
 
     def get_sound_creates(
@@ -148,8 +162,7 @@ class ChartexClient:
             params["limit_by_latest_days"] = limit_days
 
         try:
-            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
-                response = client.get(url, headers=self._get_headers(), params=params)
+            response = self._make_request(url, params)
 
             logger.info("Chartex creates API: %s %s - %s", response.status_code, url, response.text[:300] if response.text else "empty")
 
@@ -167,8 +180,8 @@ class ChartexClient:
             data = response.json()
             return self._parse_time_series(data, metric="counts")
 
-        except httpx.RequestError as e:
-            logger.error("Chartex request failed: %s", e)
+        except (httpx.RequestError, httpx.TimeoutException) as e:
+            logger.error("Chartex request failed after retries: %s", e)
             return []
 
     def list_tracked_sounds(self, limit: int = 20) -> List[dict]:
@@ -184,8 +197,7 @@ class ChartexClient:
         params = {"limit": limit, "sort_by": "tiktok_last_7_days_video_count"}
 
         try:
-            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
-                response = client.get(url, headers=self._get_headers(), params=params)
+            response = self._make_request(url, params)
 
             logger.info("Chartex list sounds: %s - %s", response.status_code, response.text[:500] if response.text else "empty")
 
@@ -206,7 +218,7 @@ class ChartexClient:
             return []
 
         except Exception as e:
-            logger.error("Chartex list failed: %s", e)
+            logger.error("Chartex list failed after retries: %s", e)
             return []
 
     def get_sound_data(

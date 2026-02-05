@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, date
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Load environment variables
 env_path = Path(__file__).parent / ".env"
@@ -121,11 +122,16 @@ def preload_all_data():
         return
     tracked = load_tracked_artists()
     if tracked:
-        # Refresh time series data for all artists
-        for artist in tracked:
-            refresh_artist_data(artist.sodatone_id)
+        # Refresh time series data for all artists in parallel
+        artist_ids = [a.sodatone_id for a in tracked]
+        with ThreadPoolExecutor(max_workers=min(5, len(artist_ids))) as executor:
+            # Submit all refresh tasks in parallel
+            futures = {executor.submit(refresh_artist_data, aid): aid for aid in artist_ids}
+            # Wait for all to complete (errors are handled inside refresh_artist_data)
+            for future in as_completed(futures):
+                pass  # Results handled internally by refresh_artist_data
         # Fetch all metrics in one query and store in session cache
-        all_ids = tuple(a.sodatone_id for a in tracked)
+        all_ids = tuple(artist_ids)
         metrics = _fetch_metrics_from_snowflake(all_ids)
         if "metrics_cache" not in st.session_state:
             st.session_state.metrics_cache = {}

@@ -75,20 +75,25 @@ def add_tracked_artist(
     image_url: Optional[str] = None,
 ) -> bool:
     """Add a new tracked artist to database and session cache."""
-    artists = load_tracked_artists()
+    # Add to database first (uses ON CONFLICT to handle duplicates)
+    db_success = add_tracked_artist_db(sodatone_id, name, spotify_id, image_url)
 
-    # Check if already tracked
+    if db_success:
+        # Reload from database to get authoritative state and sync to session
+        # This prevents race conditions where multiple tabs could add the same artist
+        db_artists = load_tracked_artists_db()
+        if db_artists:
+            _sync_session_state(db_artists)
+            return True
+
+    # Fallback: if DB failed, check session cache and add locally
+    artists = load_tracked_artists()
     for artist in artists:
         if artist.sodatone_id == sodatone_id:
             logger.info("Artist %s already tracked.", sodatone_id)
             return True
 
-    # Add to database first
-    db_success = add_tracked_artist_db(sodatone_id, name, spotify_id, image_url)
-    if not db_success:
-        logger.warning("Failed to add artist to database, using session state only")
-
-    # Add to session state cache
+    logger.warning("Failed to add artist to database, using session state only")
     new_artist = TrackedArtist(
         sodatone_id=sodatone_id,
         name=name,
