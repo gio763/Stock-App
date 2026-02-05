@@ -70,11 +70,10 @@ class ChartexClient:
             logger.warning("Chartex not configured, returning empty data")
             return []
 
-        # Correct endpoint: /songs/{platform_id}/{platform}/stats/{metric}/
-        url = f"{self._base_url}/songs/{sound_id}/tiktok/stats/tiktok-video-views/"
+        # Correct endpoint: /tiktok-sounds/{tiktok_sound_id}/stats/{metric}/
+        url = f"{self._base_url}/tiktok-sounds/{sound_id}/stats/tiktok-video-views/"
 
-        params = {}
-        # Note: mode not available for video-views metric per docs
+        params = {"mode": mode}
         if start_date:
             params["start_date"] = start_date.strftime("%Y-%m-%d")
         if end_date:
@@ -133,9 +132,9 @@ class ChartexClient:
             logger.warning("Chartex not configured, returning empty data")
             return []
 
-        # Correct endpoint: /songs/{platform_id}/{platform}/stats/{metric}/
+        # Correct endpoint: /tiktok-sounds/{tiktok_sound_id}/stats/{metric}/
         # tiktok-video-counts = number of videos using the sound
-        url = f"{self._base_url}/songs/{sound_id}/tiktok/stats/tiktok-video-counts/"
+        url = f"{self._base_url}/tiktok-sounds/{sound_id}/stats/tiktok-video-counts/"
 
         params = {"mode": mode}
         if start_date:
