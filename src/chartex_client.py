@@ -82,7 +82,7 @@ class ChartexClient:
             params["limit_by_latest_days"] = limit_days
 
         try:
-            with httpx.Client(timeout=30.0) as client:
+            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
                 response = client.get(url, headers=self._get_headers(), params=params)
 
             logger.info("Chartex views API: %s %s - %s", response.status_code, url, response.text[:300] if response.text else "empty")
@@ -145,7 +145,7 @@ class ChartexClient:
             params["limit_by_latest_days"] = limit_days
 
         try:
-            with httpx.Client(timeout=30.0) as client:
+            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
                 response = client.get(url, headers=self._get_headers(), params=params)
 
             logger.info("Chartex creates API: %s %s - %s", response.status_code, url, response.text[:300] if response.text else "empty")

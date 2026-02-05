@@ -480,12 +480,13 @@ def render_summary_page():
                         import httpx
                         from src.config import settings
                         try:
-                            url = f"https://chartex.com/external/v1/songs/{sound_id}/tiktok/stats/tiktok-video-counts/"
+                            url = f"https://chartex.com/external/v1/tiktok-sounds/{sound_id}/stats/tiktok-video-counts/"
                             headers = {
                                 "X-APP-ID": settings.chartex.app_id or "NOT SET",
                                 "X-APP-TOKEN": settings.chartex.app_token or "NOT SET",
                             }
-                            with httpx.Client(timeout=30.0) as client:
+                            # follow_redirects=True to handle 308 redirects
+                            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
                                 resp = client.get(url, headers=headers, params={"mode": "total"})
                             st.code(f"URL: {url}\nStatus: {resp.status_code}\nResponse: {resp.text[:500]}")
                         except Exception as e:
