@@ -164,6 +164,40 @@ class ChartexClient:
             logger.error("Chartex request failed: %s", e)
             return []
 
+    def list_tracked_sounds(self, limit: int = 20) -> List[dict]:
+        """Get list of sounds tracked in your Chartex dashboard.
+
+        Returns:
+            List of sound dictionaries with ID, name, and stats
+        """
+        if not self.configured:
+            return []
+
+        url = f"{self._base_url}/tiktok-sounds/"
+        params = {"limit": limit, "sort_by": "tiktok_last_7_days_video_count"}
+
+        try:
+            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+                response = client.get(url, headers=self._get_headers(), params=params)
+
+            logger.info("Chartex list sounds: %s - %s", response.status_code, response.text[:500] if response.text else "empty")
+
+            if response.status_code >= 400:
+                logger.warning("Chartex list error: %s", response.status_code)
+                return []
+
+            data = response.json()
+            # Return the results list
+            if isinstance(data, dict):
+                return data.get("results", data.get("data", []))
+            elif isinstance(data, list):
+                return data
+            return []
+
+        except Exception as e:
+            logger.error("Chartex list failed: %s", e)
+            return []
+
     def get_sound_data(
         self,
         sound_id: str,

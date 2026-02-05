@@ -476,19 +476,18 @@ def render_summary_page():
                         st.rerun()
                 with col3:
                     if st.button("Test API", key="test_api_btn"):
-                        # Test the Chartex API directly
+                        # Test by listing tracked sounds to see actual IDs
                         import httpx
                         from src.config import settings
                         try:
-                            url = f"https://chartex.com/external/v1/tiktok-sounds/{sound_id}/stats/tiktok-video-counts/"
+                            url = "https://chartex.com/external/v1/tiktok-sounds/"
                             headers = {
                                 "X-APP-ID": settings.chartex.app_id or "NOT SET",
                                 "X-APP-TOKEN": settings.chartex.app_token or "NOT SET",
                             }
-                            # follow_redirects=True to handle 308 redirects
                             with httpx.Client(timeout=30.0, follow_redirects=True) as client:
-                                resp = client.get(url, headers=headers, params={"mode": "total"})
-                            st.code(f"URL: {url}\nStatus: {resp.status_code}\nResponse: {resp.text[:500]}")
+                                resp = client.get(url, headers=headers, params={"limit": 10})
+                            st.code(f"Tracked Sounds:\n{resp.text[:1500]}")
                         except Exception as e:
                             st.error(f"API Test Error: {e}")
             else:
