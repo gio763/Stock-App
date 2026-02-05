@@ -553,6 +553,7 @@ def analyze_deal(
         generate_weekly_gross_series,
         compute_payback_recommendation,
         compute_irr_recommendation,
+        DealType as PaybackDealType,
     )
 
     weekly_gross_series = generate_weekly_gross_series(
@@ -561,10 +562,18 @@ def analyze_deal(
         num_years=10,
     )
 
+    # Map model DealType to payback DealType
+    payback_deal_type_map = {
+        DealType.DISTRIBUTION: PaybackDealType.DISTRIBUTION,
+        DealType.PROFIT_SPLIT: PaybackDealType.PROFIT_SPLIT,
+        DealType.ROYALTY: PaybackDealType.ROYALTY,
+    }
+    payback_deal_type = payback_deal_type_map.get(inputs.deal_type, PaybackDealType.DISTRIBUTION)
+
     # =========================================================================
     # SECTION 1: PAYBACK-BASED RECOMMENDATION (18 months)
     # =========================================================================
-    # Max cost that recoups by week 78, with implied IRR
+    # Max cost that can be recouped by week 78 (varies by deal type)
     payback_rec = compute_payback_recommendation(
         weekly_gross_series=weekly_gross_series,
         annual_cash_flows_base=label_inflows_base,
@@ -572,6 +581,7 @@ def analyze_deal(
         advance_share_pct=inputs.advance_share,
         marketing_recoupable=inputs.marketing_recoupable,
         payback_horizon_weeks=78,
+        deal_type=payback_deal_type,
     )
 
     payback_recommendation = PaybackRecommendation(

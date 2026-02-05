@@ -3,25 +3,35 @@ Payback and IRR-based deal cost solvers for music catalog pricing.
 
 This module provides:
 1. Weekly cash flow simulation with recoup waterfall
-2. Payback-based max cost: C(78) = cumulative label cash-in by week 78
+2. Payback-based max cost: Maximum recoupable in payback horizon
 3. IRR-based max cost: max cost for target IRR (no payback constraint)
 4. Recoup week computation for any given cost
 
-CASH FLOW DEFINITIONS:
-----------------------
-- Gross revenue splits into Label Revenue and Artist Pay using deal_pct (label share)
-- Label base cash-in = gross * deal_pct
-- Artist base pay = gross * (1 - deal_pct)
-- Advance is ALWAYS recoupable from artist's share
-- Marketing is recoupable only when toggle is ON
-- During recoup: label withholds from artist pay, adding to label cash-in
-- Label cash-in = label_base + min(artist_pay, remaining_recoup_balance)
+DEAL TYPE MECHANICS:
+-------------------
+- DISTRIBUTION: Artist's share (gross - distro fee) used for recoupment
+- ROYALTY: Only artist's royalty % is available for recoupment
+- PROFIT_SPLIT: Expenses deducted from gross, remainder split - no withholding
 
-This matches the existing CashFlowEngine behavior in model.py.
+PAYBACK CALCULATION:
+-------------------
+The 18-month payback max is the amount that can be recouped within 78 weeks.
+This varies by deal type based on what portion of revenue is available:
+- Distribution: artist_share × 78-week gross
+- Royalty: royalty_rate × 78-week gross
+- Profit Split: 78-week gross (expenses come off top before split)
 """
 
 from dataclasses import dataclass
 from typing import List, Optional
+from enum import Enum
+
+
+class DealType(Enum):
+    """Types of deal structures for payback calculations."""
+    DISTRIBUTION = "distribution"
+    PROFIT_SPLIT = "profit_split"
+    ROYALTY = "royalty"
 
 
 @dataclass
@@ -172,42 +182,59 @@ def compute_payback_max_cost(
     advance_share_pct: float,
     marketing_recoupable: bool,
     payback_horizon_weeks: int = 78,
+    deal_type: Optional[DealType] = None,
 ) -> float:
     """
-    Compute maximum deal cost that pays back by the horizon.
+    Compute maximum deal cost that can be recouped by the horizon.
 
-    max_cost_payback = C(T) = cumulative label cash-in by week T
-
-    Note: This is an approximation. The exact max cost depends on the
-    recoup waterfall, but C(T) gives a good upper bound since label
-    cash-in during recoup period is >= label base share.
+    The calculation varies by deal type:
+    - DISTRIBUTION: Recoup from artist's share (1 - deal_pct) × gross
+    - ROYALTY: Recoup from artist's royalty only. For royalty deals,
+               deal_pct is label's share (e.g., 0.80), so recoup capacity
+               is (1 - deal_pct) × gross = royalty_rate × gross
+    - PROFIT_SPLIT: Expenses deducted from gross before split, so full
+                    gross is available for expense deduction
 
     Args:
         weekly_gross_series: Weekly gross revenues
-        deal_pct: Label's share
+        deal_pct: Label's share (e.g., 0.25 for distribution, 0.80 for royalty)
         advance_share_pct: Fraction that is advance
         marketing_recoupable: Whether marketing is recoupable
         payback_horizon_weeks: Target week (default 78 = 18 months)
+        deal_type: Type of deal (affects recoupment mechanics)
 
     Returns:
-        Maximum deal cost that pays back by horizon
+        Maximum deal cost that can be recouped by horizon
     """
-    # For payback calculation, we want C(T) where:
-    # - During recoup: label gets label_base + withheld
-    # - If cost = C(T), then by week T, cum_label_cash_in = C(T)
-    #
-    # The max cost is achieved when we recoup exactly at week T.
-    # Use binary search to find this cost.
-
-    # Upper bound: if label got ALL gross revenue for T weeks
     horizon_weeks = min(payback_horizon_weeks, len(weekly_gross_series))
     total_gross_in_horizon = sum(weekly_gross_series[:horizon_weeks])
 
-    # Binary search for max cost that pays back by horizon
-    cost_low = 0.0
-    cost_high = total_gross_in_horizon  # Upper bound
-    tolerance = 1.0  # $1 tolerance
+    # Calculate recoupment capacity based on deal type
+    if deal_type == DealType.PROFIT_SPLIT:
+        # Profit split: expenses come off gross before split
+        # Max expense = total gross (though this would leave nothing to split)
+        # More realistically, cap at gross to ensure SOME profit
+        recoup_capacity = total_gross_in_horizon
+    elif deal_type == DealType.ROYALTY:
+        # Royalty: only artist's royalty portion available for recoup
+        # deal_pct = label's share (e.g., 0.80), royalty = 1 - 0.80 = 0.20
+        artist_royalty_rate = 1.0 - deal_pct
+        recoup_capacity = total_gross_in_horizon * artist_royalty_rate
+    else:
+        # Distribution (default): recoup from artist's share
+        artist_share = 1.0 - deal_pct
+        recoup_capacity = total_gross_in_horizon * artist_share
 
+    # For profit split, we can return recoup capacity directly
+    # (expenses are deducted, not withheld)
+    if deal_type == DealType.PROFIT_SPLIT:
+        return recoup_capacity
+
+    # For distribution and royalty, use binary search to find exact max
+    # that pays back by the horizon (accounts for weekly timing)
+    cost_low = 0.0
+    cost_high = recoup_capacity
+    tolerance = 1.0  # $1 tolerance
     best_cost = 0.0
 
     for _ in range(100):  # Max iterations
@@ -445,20 +472,24 @@ def compute_payback_recommendation(
     advance_share_pct: float,
     marketing_recoupable: bool,
     payback_horizon_weeks: int = 78,
+    deal_type: Optional[DealType] = None,
 ) -> PaybackRecommendation:
     """
     Compute the payback-based recommendation.
 
-    max_cost = maximum cost that pays back by week 78.
+    max_cost = maximum cost that can be recouped by week 78.
     implied_irr = IRR at that cost.
+
+    The max_cost varies by deal type based on recoupment mechanics.
     """
-    # Find max cost for payback
+    # Find max cost for payback (varies by deal type)
     max_cost = compute_payback_max_cost(
         weekly_gross_series=weekly_gross_series,
         deal_pct=deal_pct,
         advance_share_pct=advance_share_pct,
         marketing_recoupable=marketing_recoupable,
         payback_horizon_weeks=payback_horizon_weeks,
+        deal_type=deal_type,
     )
 
     # Get recoup week at max cost
