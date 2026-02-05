@@ -555,47 +555,49 @@ def compute_irr_recommendation(
     recoup_week = informational payback timing.
     """
     # For ALL deal types, find the investment where actual IRR = target IRR
-    # This accounts for recoupment timing (Dist/Royalty) and expense deduction (Profit Split)
+    # Each deal type has different cash flow mechanics
 
     if annual_gross is not None and deal_type is not None:
         total_gross = sum(annual_gross)
-        artist_share = 1.0 - deal_pct
 
         # Binary search for the investment that gives exactly target IRR
         cost_low = 0.0
-        # Upper bound: use total gross as a safe upper limit
-        # The binary search will find the right answer below this
-        cost_high = total_gross
-
+        cost_high = total_gross  # Safe upper limit
         tolerance = 100.0  # $100 tolerance
         max_cost = 0.0
 
         for _ in range(100):
             cost_mid = (cost_low + cost_high) / 2
 
-            if deal_type == DealType.PROFIT_SPLIT:
-                # Profit Split: expenses reduce net profit before splitting
+            if deal_type == DealType.ROYALTY:
+                # ROYALTY: Label gets fixed % of gross forever, NO recoupment
+                # Label CF = Gross × Royalty% (deal_pct is the royalty rate)
+                # Advance is just Year 0 outflow
+                actual_cf = [gross_y * deal_pct for gross_y in annual_gross]
+
+            elif deal_type == DealType.PROFIT_SPLIT:
+                # PROFIT SPLIT: Expenses PERMANENTLY reduce value
+                # Net = Gross - Expenses, Label CF = Net × Split%
                 actual_cf = []
                 for gross_y in annual_gross:
                     expense_y = cost_mid * (gross_y / total_gross) if total_gross > 0 else 0
                     net_profit_y = max(0, gross_y - expense_y)
                     label_cf_y = net_profit_y * deal_pct
                     actual_cf.append(label_cf_y)
-            else:
-                # Distribution/Royalty: recoupment withheld from artist's share
+
+            else:  # DISTRIBUTION (Funded Distribution)
+                # FUNDED DISTRIBUTION: 100% during recoup, then split%
+                # Label gets ALL gross until recouped, then post-recoup share
                 actual_cf = []
-                remaining_recoup = cost_mid
+                unrecouped = cost_mid
                 for gross_y in annual_gross:
-                    label_base = gross_y * deal_pct
-                    artist_due = gross_y * artist_share
-
-                    if remaining_recoup > 0:
-                        withheld = min(artist_due, remaining_recoup)
-                        remaining_recoup -= withheld
-                        label_cf_y = label_base + withheld
+                    if unrecouped > 0:
+                        # Still recouping: Label gets 100%
+                        unrecouped -= gross_y
+                        label_cf_y = gross_y
                     else:
-                        label_cf_y = label_base
-
+                        # Post-recoup: Label gets their share
+                        label_cf_y = gross_y * deal_pct
                     actual_cf.append(label_cf_y)
 
             # Calculate IRR at this cost

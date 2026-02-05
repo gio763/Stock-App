@@ -202,7 +202,31 @@ def compute_max_cost_for_irr(cash_flows: List[float], target_irr: float) -> floa
 
 
 class CashFlowEngine:
-    """Computes cash flows with optional recoupment waterfall."""
+    """
+    Computes cash flows for different deal types.
+
+    DEAL TYPE MECHANICS (CORRECT):
+
+    1. ROYALTY DEAL:
+       - Label gets fixed % of gross revenue forever
+       - NO recoupment waterfall
+       - Advance is just Year 0 outflow, not recouped from revenue stream
+       - Label CF = Gross × Royalty%
+
+    2. FUNDED DISTRIBUTION DEAL:
+       - Label gets 100% of gross UNTIL fully recouped
+       - AFTER recoup: Label gets post-recoup share %
+       - Expenses affect TIMING only, not lifetime value
+       - Label CF = 100% while unrecouped, then Post_Recoup_Share%
+
+    3. PROFIT SPLIT:
+       - Expenses PERMANENTLY reduce value (deducted from gross)
+       - Net Profit = Gross - Expenses
+       - Label CF = Net × Split%
+       - No 100% recoup period
+
+    Expected IRR ranking (same revenue): Royalty ≥ Funded Distribution >> Profit Split
+    """
 
     def __init__(
         self,
@@ -213,6 +237,20 @@ class CashFlowEngine:
         total_deal_cost: Optional[float] = None,
         deal_type: Optional[DealType] = None,
     ):
+        """
+        Initialize cash flow engine.
+
+        Args:
+            year1_total_rev: Year 1 gross revenue
+            decay_multipliers: {year: multiplier} for years 1-10
+            label_share: Meaning depends on deal type:
+                - ROYALTY: Label's royalty rate (e.g., 0.20 for 20%)
+                - DISTRIBUTION: Label's POST-RECOUP share (e.g., 0.30 for 30%)
+                - PROFIT_SPLIT: Label's share of net profits (e.g., 0.50 for 50%)
+            marketing_recoupable: Whether marketing costs are recoupable (Distribution only)
+            total_deal_cost: Total investment (advance + marketing + recording)
+            deal_type: Type of deal structure
+        """
         self.year1_total_rev = year1_total_rev
         self.decay_multipliers = decay_multipliers
         self.label_share = label_share
@@ -239,7 +277,11 @@ class CashFlowEngine:
         self,
     ) -> List[Tuple[int, float, float, float, float]]:
         """
-        Compute cash flows without recoupment.
+        Compute steady-state cash flows (no recoupment effects).
+
+        For ROYALTY: This IS the correct cash flow (no recoupment ever)
+        For DISTRIBUTION: This is post-recoup steady state
+        For PROFIT_SPLIT: This is pre-expense steady state
 
         Returns:
             List of (year, multiplier, gross_rev, label_cash_in, artist_pay) tuples
@@ -255,103 +297,113 @@ class CashFlowEngine:
         self, total_cost: float
     ) -> List[Tuple[int, float, float, float, float]]:
         """
-        Compute cash flows with recoupment waterfall.
-
-        For DISTRIBUTION and ROYALTY deals:
-        - Total cost is recoupable from artist share
-        - Each year, artist's due amount is withheld until recouped
-        - Withheld amounts added to label cash in
-
-        For PROFIT_SPLIT deals:
-        - Expenses are deducted from Gross Revenue FIRST
-        - Net Profit = Gross - Expenses (spread across years)
-        - Net Profit is split according to deal percentage
-        - Both parties share the expense burden proportionally
+        Compute cash flows with deal-specific mechanics.
 
         Args:
-            total_cost: Total deal cost (advance + marketing)
+            total_cost: Total deal cost (advance + marketing + recording)
 
         Returns:
             List of (year, multiplier, gross_rev, label_cash_in, artist_pay) tuples
         """
-        if self.deal_type == DealType.PROFIT_SPLIT:
+        if self.deal_type == DealType.ROYALTY:
+            return self._compute_royalty_cash_flows()
+        elif self.deal_type == DealType.PROFIT_SPLIT:
             return self._compute_profit_split_cash_flows(total_cost)
-        else:
-            return self._compute_standard_recoup_cash_flows(total_cost)
+        else:  # DISTRIBUTION (Funded Distribution)
+            return self._compute_funded_distribution_cash_flows(total_cost)
 
-    def _compute_profit_split_cash_flows(
+    def _compute_royalty_cash_flows(
+        self,
+    ) -> List[Tuple[int, float, float, float, float]]:
+        """
+        Compute cash flows for ROYALTY deal.
+
+        Royalty Deal Logic:
+        - Label receives fixed royalty % of gross revenue FOREVER
+        - NO recoupment waterfall
+        - Advance is Year 0 outflow, not recouped from this stream
+        - Label CF_t = Gross_t × Royalty%
+
+        This is the simplest deal type. Label participates at fixed rate forever.
+        """
+        results = []
+        for year, multiplier, gross_rev in self.compute_yearly_revenues():
+            # Label always gets their royalty percentage
+            label_cash_in = gross_rev * self.label_share
+            artist_pay = gross_rev * self.artist_share
+            results.append((year, multiplier, gross_rev, label_cash_in, artist_pay))
+        return results
+
+    def _compute_funded_distribution_cash_flows(
         self, total_cost: float
     ) -> List[Tuple[int, float, float, float, float]]:
         """
-        Compute cash flows for Profit Split deal.
+        Compute cash flows for FUNDED DISTRIBUTION deal.
 
-        Net Profit Deal Logic:
-        - Expenses are deducted from Gross Revenue first
-        - Net Profit = Gross - Expenses
-        - Net Profit is split according to deal_percent
-        - Artist Income = Net Profit × artist_share
-        - Label Income = Net Profit × label_share
+        Funded Distribution Logic:
+        - Label funds advance + recording + marketing
+        - Label gets 100% of gross UNTIL fully recouped
+        - AFTER recoup: Label gets post-recoup share (e.g., 30%)
+        - Artist gets 0% during recoup, then their share (e.g., 70%)
+        - Expenses affect TIMING only, not lifetime value
 
-        We spread the expense deduction across the projection period
-        proportionally to revenue (weighted by each year's share of total revenue).
+        This is NOT a profit split! The label gets 100% during recoup,
+        not "their share + withheld".
         """
         results = []
+        unrecouped = total_cost
 
-        # Calculate total revenue over 10 years to determine expense allocation
-        yearly_revenues = self.compute_yearly_revenues()
-        total_revenue = sum(gross for _, _, gross in yearly_revenues)
+        for year, multiplier, gross_rev in self.compute_yearly_revenues():
+            if unrecouped > 0:
+                # Still recouping: Label gets 100% of gross
+                amount_to_recoup = min(gross_rev, unrecouped)
+                unrecouped -= amount_to_recoup
 
-        # Remaining expenses to deduct (spread across years proportionally)
-        remaining_expense = total_cost
-
-        for year, multiplier, gross_rev in yearly_revenues:
-            # Allocate expenses proportionally to this year's revenue share
-            if total_revenue > 0:
-                year_expense_share = (gross_rev / total_revenue) * total_cost
+                # Label gets 100% until recouped
+                label_cash_in = gross_rev
+                artist_pay = 0.0
             else:
-                year_expense_share = total_cost / 10.0  # Fallback: equal distribution
-
-            # Deduct this year's expense allocation from gross to get net profit
-            expense_this_year = min(year_expense_share, remaining_expense, gross_rev)
-            remaining_expense -= expense_this_year
-
-            net_profit = max(0, gross_rev - expense_this_year)
-
-            # Split net profit according to deal percentage
-            label_cash_in = net_profit * self.label_share
-            artist_pay = net_profit * self.artist_share
+                # Fully recouped: Normal split applies
+                label_cash_in = gross_rev * self.label_share
+                artist_pay = gross_rev * self.artist_share
 
             results.append((year, multiplier, gross_rev, label_cash_in, artist_pay))
 
         return results
 
-    def _compute_standard_recoup_cash_flows(
+    def _compute_profit_split_cash_flows(
         self, total_cost: float
     ) -> List[Tuple[int, float, float, float, float]]:
         """
-        Compute cash flows with standard recoupment waterfall.
+        Compute cash flows for TRUE PROFIT SPLIT deal.
 
-        Used for DISTRIBUTION and ROYALTY deals:
-        - Label gets their base share
-        - Artist's share is withheld until advance/costs are recouped
+        Profit Split Logic:
+        - Gross revenue comes in
+        - Expenses are PERMANENTLY deducted (destroy value)
+        - Net Profit = Gross - Expenses
+        - Net Profit is split according to deal percentage
+        - NO 100% recoup period
+
+        This is the weakest deal type for the label.
+        Expenses spread proportionally across years based on revenue share.
         """
         results = []
-        remaining_recoup = total_cost
+        yearly_revenues = self.compute_yearly_revenues()
+        total_revenue = sum(gross for _, _, gross in yearly_revenues)
 
-        for year, multiplier, gross_rev in self.compute_yearly_revenues():
-            # Base split
-            label_base = gross_rev * self.label_share
-            artist_due = gross_rev * self.artist_share
-
-            # Recoupment waterfall
-            if remaining_recoup > 0:
-                withheld = min(artist_due, remaining_recoup)
-                remaining_recoup -= withheld
-                label_cash_in = label_base + withheld
-                artist_pay = artist_due - withheld
+        for year, multiplier, gross_rev in yearly_revenues:
+            # Allocate expenses proportionally to this year's revenue
+            if total_revenue > 0:
+                year_expense = (gross_rev / total_revenue) * total_cost
             else:
-                label_cash_in = label_base
-                artist_pay = artist_due
+                year_expense = total_cost / 10.0
+
+            # Net profit after expense deduction
+            net_profit = max(0, gross_rev - year_expense)
+
+            # Split net profit
+            label_cash_in = net_profit * self.label_share
+            artist_pay = net_profit * self.artist_share
 
             results.append((year, multiplier, gross_rev, label_cash_in, artist_pay))
 
