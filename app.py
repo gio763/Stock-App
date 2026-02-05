@@ -466,7 +466,7 @@ def render_summary_page():
                     break
 
             if sound_id:
-                col1, col2 = st.columns([3, 1])
+                col1, col2, col3 = st.columns([2, 1, 1])
                 with col1:
                     st.success(f"Sound ID: {sound_id}")
                 with col2:
@@ -474,6 +474,22 @@ def render_summary_page():
                         name = sound_name if sound_name else f"TikTok Sound {sound_id[-8:]}"
                         add_tracked_sound(sound_id=sound_id, name=name)
                         st.rerun()
+                with col3:
+                    if st.button("Test API", key="test_api_btn"):
+                        # Test the Chartex API directly
+                        import httpx
+                        from src.config import settings
+                        try:
+                            url = f"https://chartex.com/external/v1/songs/{sound_id}/tiktok/stats/tiktok-video-counts/"
+                            headers = {
+                                "X-APP-ID": settings.chartex.app_id or "NOT SET",
+                                "X-APP-TOKEN": settings.chartex.app_token or "NOT SET",
+                            }
+                            with httpx.Client(timeout=30.0) as client:
+                                resp = client.get(url, headers=headers, params={"mode": "total"})
+                            st.code(f"URL: {url}\nStatus: {resp.status_code}\nResponse: {resp.text[:500]}")
+                        except Exception as e:
+                            st.error(f"API Test Error: {e}")
             else:
                 st.error("Could not extract sound ID.")
 
@@ -481,15 +497,21 @@ def render_summary_page():
     if tracked_sounds:
         for sound in tracked_sounds:
             # Fetch data from Chartex
+            api_error = None
             try:
                 sound_data = chartex_client.get_sound_data(sound.sound_id, lookback_days=30)
             except Exception as e:
+                api_error = str(e)
                 sound_data = TikTokSound(
                     sound_id=sound.sound_id,
                     name=sound.name,
                     total_views=0,
                     total_creates=0,
                 )
+
+            # Show API error if any
+            if api_error:
+                st.error(f"Chartex API Error: {api_error}")
 
             col1, col2 = st.columns([20, 1])
             with col1:
