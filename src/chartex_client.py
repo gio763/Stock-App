@@ -28,8 +28,8 @@ class ChartexClient:
     def configured(self) -> bool:
         return settings.chartex.configured
 
-    def _get_headers(self) -> dict:
-        """Get request headers with API credentials."""
+    def _get_auth_params(self) -> dict:
+        """Get authentication query parameters."""
         app_id = settings.chartex.app_id
         app_token = settings.chartex.app_token
 
@@ -39,10 +39,16 @@ class ChartexClient:
                 "Set CHARTEX_APP_ID and CHARTEX_APP_TOKEN environment variables."
             )
 
-        # Chartex uses App ID and Token for authentication
+        # Try query parameter auth (common for external APIs)
         return {
-            "X-App-Id": app_id,
-            "X-App-Token": app_token,
+            "app_id": app_id,
+            "app_token": app_token,
+        }
+
+    def _get_headers(self) -> dict:
+        """Get request headers."""
+        return {
+            "Accept": "application/json",
             "Content-Type": "application/json",
         }
 
@@ -71,7 +77,10 @@ class ChartexClient:
             return []
 
         url = f"{self._base_url}/tiktok-sounds/{sound_id}/stats/tiktok-video-views/"
-        params = {"mode": mode}
+
+        # Combine auth params with request params
+        params = self._get_auth_params()
+        params["mode"] = mode
 
         if start_date:
             params["start_date"] = start_date.strftime("%Y-%m-%d")
@@ -84,8 +93,10 @@ class ChartexClient:
             with httpx.Client(timeout=30.0) as client:
                 response = client.get(url, headers=self._get_headers(), params=params)
 
+            logger.info("Chartex views API response: %s - %s", response.status_code, response.text[:200] if response.text else "empty")
+
             if response.status_code == 401:
-                raise ChartexAPIError("Invalid Chartex API key")
+                raise ChartexAPIError("Invalid Chartex credentials")
             if response.status_code == 403:
                 raise ChartexAPIError("Access denied - sound may not be tracked")
             if response.status_code == 404:
@@ -93,6 +104,10 @@ class ChartexClient:
                 return []
             if response.status_code >= 400:
                 raise ChartexAPIError(f"Chartex API error: {response.status_code} - {response.text}")
+
+            if not response.text:
+                logger.warning("Chartex returned empty response")
+                return []
 
             data = response.json()
             return self._parse_time_series(data)
@@ -126,7 +141,10 @@ class ChartexClient:
             return []
 
         url = f"{self._base_url}/tiktok-sounds/{sound_id}/stats/tiktok-video-creates/"
-        params = {"mode": mode}
+
+        # Combine auth params with request params
+        params = self._get_auth_params()
+        params["mode"] = mode
 
         if start_date:
             params["start_date"] = start_date.strftime("%Y-%m-%d")
@@ -139,8 +157,13 @@ class ChartexClient:
             with httpx.Client(timeout=30.0) as client:
                 response = client.get(url, headers=self._get_headers(), params=params)
 
+            logger.info("Chartex creates API response: %s", response.status_code)
+
             if response.status_code >= 400:
-                logger.warning("Chartex creates API error: %s", response.status_code)
+                logger.warning("Chartex creates API error: %s - %s", response.status_code, response.text[:200] if response.text else "empty")
+                return []
+
+            if not response.text:
                 return []
 
             data = response.json()
