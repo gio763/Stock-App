@@ -50,7 +50,7 @@ class ChartexSettings:
     """Chartex API settings for TikTok data."""
     app_id_env_var: str = "CHARTEX_APP_ID"
     app_token_env_var: str = "CHARTEX_APP_TOKEN"
-    api_base_url: str = "https://chartex.com/external/v1"
+    api_base_url: str = "https://api.chartex.com/external/v1"
 
     @property
     def app_id(self) -> Optional[str]:

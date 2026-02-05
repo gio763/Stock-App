@@ -58,7 +58,7 @@ class ChartexClient:
 
         Args:
             sound_id: TikTok sound ID
-            mode: 'daily' for daily values, 'total' for cumulative
+            mode: 'daily' for daily values (note: 'total' not supported for views)
             start_date: Optional start date filter
             end_date: Optional end date filter
             limit_days: Optional limit to last N days
@@ -70,10 +70,9 @@ class ChartexClient:
             logger.warning("Chartex not configured, returning empty data")
             return []
 
-        # Correct endpoint: /tiktok-sounds/{tiktok_sound_id}/stats/{metric}/
         url = f"{self._base_url}/tiktok-sounds/{sound_id}/stats/tiktok-video-views/"
 
-        params = {"mode": mode}
+        params = {"mode": "daily"}  # views only supports daily mode
         if start_date:
             params["start_date"] = start_date.strftime("%Y-%m-%d")
         if end_date:
@@ -87,22 +86,28 @@ class ChartexClient:
 
             logger.info("Chartex views API: %s %s - %s", response.status_code, url, response.text[:300] if response.text else "empty")
 
-            if response.status_code == 401:
-                raise ChartexAPIError("Invalid Chartex credentials")
-            if response.status_code == 403:
-                raise ChartexAPIError("Access denied - sound may not be tracked")
+            if response.status_code in (401, 403):
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get("error", {}).get("message", "Unknown error")
+                    if "authentication" in error_msg.lower() or "credential" in error_msg.lower():
+                        raise ChartexAPIError(f"Chartex auth failed: {error_msg}")
+                except (ValueError, KeyError):
+                    pass
+                raise ChartexAPIError("Access denied - check credentials or add sound to Chartex dashboard")
+
             if response.status_code == 404:
                 logger.warning("Sound %s not found in Chartex", sound_id)
                 return []
+
             if response.status_code >= 400:
-                raise ChartexAPIError(f"Chartex API error: {response.status_code} - {response.text}")
+                raise ChartexAPIError(f"Chartex API error: {response.status_code}")
 
             if not response.text:
-                logger.warning("Chartex returned empty response")
                 return []
 
             data = response.json()
-            return self._parse_time_series(data)
+            return self._parse_time_series(data, metric="views")
 
         except httpx.RequestError as e:
             logger.error("Chartex request failed: %s", e)
@@ -132,8 +137,6 @@ class ChartexClient:
             logger.warning("Chartex not configured, returning empty data")
             return []
 
-        # Correct endpoint: /tiktok-sounds/{tiktok_sound_id}/stats/{metric}/
-        # tiktok-video-counts = number of videos using the sound
         url = f"{self._base_url}/tiktok-sounds/{sound_id}/stats/tiktok-video-counts/"
 
         params = {"mode": mode}
@@ -150,15 +153,19 @@ class ChartexClient:
 
             logger.info("Chartex creates API: %s %s - %s", response.status_code, url, response.text[:300] if response.text else "empty")
 
+            if response.status_code == 404:
+                logger.warning("Sound %s not found in Chartex", sound_id)
+                return []
+
             if response.status_code >= 400:
-                logger.warning("Chartex creates API error: %s - %s", response.status_code, response.text[:200] if response.text else "empty")
+                logger.warning("Chartex creates API error: %s", response.status_code)
                 return []
 
             if not response.text:
                 return []
 
             data = response.json()
-            return self._parse_time_series(data)
+            return self._parse_time_series(data, metric="counts")
 
         except httpx.RequestError as e:
             logger.error("Chartex request failed: %s", e)
@@ -187,9 +194,13 @@ class ChartexClient:
                 return []
 
             data = response.json()
-            # Return the results list
+            # Return the items list - API format is {"data": {"items": [...]}}
             if isinstance(data, dict):
-                return data.get("results", data.get("data", []))
+                inner = data.get("data", data)
+                if isinstance(inner, dict):
+                    return inner.get("items", inner.get("results", []))
+                elif isinstance(inner, list):
+                    return inner
             elif isinstance(data, list):
                 return data
             return []
@@ -212,17 +223,13 @@ class ChartexClient:
         Returns:
             TikTokSound with metrics and time series
         """
-        # Get views time series (total mode for current total)
-        views_total = self.get_sound_views(sound_id, mode="total", limit_days=1)
+        # Get daily time series (note: tiktok-video-views doesn't support total mode)
         views_daily = self.get_sound_views(sound_id, mode="daily", limit_days=lookback_days)
-
-        # Get creates time series
-        creates_total = self.get_sound_creates(sound_id, mode="total", limit_days=1)
         creates_daily = self.get_sound_creates(sound_id, mode="daily", limit_days=lookback_days)
 
-        # Calculate current totals
-        total_views = int(views_total[-1].value) if views_total else 0
-        total_creates = int(creates_total[-1].value) if creates_total else 0
+        # For totals, sum all available daily data (API doesn't provide cumulative totals for views)
+        total_views = int(sum(p.value for p in views_daily)) if views_daily else 0
+        total_creates = int(sum(p.value for p in creates_daily)) if creates_daily else 0
 
         # Calculate 7-day and 24-hour changes
         views_7d = self._sum_last_n_days(views_daily, 7)
@@ -244,34 +251,50 @@ class ChartexClient:
             creates_history=creates_daily,
         )
 
-    def _parse_time_series(self, data: dict) -> List[TimeSeriesPoint]:
+    def _parse_time_series(self, data: dict, metric: str = "views") -> List[TimeSeriesPoint]:
         """Parse Chartex API response into TimeSeriesPoint list."""
         points = []
 
-        # Handle different response formats
-        if isinstance(data, list):
+        # Handle Chartex response format: {"data": {"video_views": [...]} or {"video_counts": [...]}}
+        if isinstance(data, dict):
+            inner_data = data.get("data", data)
+            if isinstance(inner_data, dict):
+                # Try to get the time series array
+                if metric == "views":
+                    items = inner_data.get("video_views", [])
+                else:
+                    items = inner_data.get("video_counts", [])
+                # Fallback to other keys
+                if not items:
+                    items = inner_data.get("results", inner_data.get("items", []))
+            elif isinstance(inner_data, list):
+                items = inner_data
+            else:
+                items = []
+        elif isinstance(data, list):
             items = data
-        elif isinstance(data, dict):
-            items = data.get("data", data.get("results", []))
         else:
             return []
 
         for item in items:
             try:
-                # Try different date field names
+                # Get date
                 date_str = item.get("date") or item.get("timestamp") or item.get("day")
-                value = item.get("value") or item.get("count") or item.get("views") or 0
+                # Get value - try different field names
+                value = (
+                    item.get("daily_views") or
+                    item.get("tiktok_video_count") or
+                    item.get("value") or
+                    item.get("count") or
+                    item.get("views") or
+                    0
+                )
 
                 if date_str:
                     if isinstance(date_str, str):
-                        # Parse various date formats
-                        for fmt in ["%Y-%m-%d", "%Y%m%d", "%Y-%m-%dT%H:%M:%S"]:
-                            try:
-                                parsed_date = datetime.strptime(date_str[:10], fmt[:len(date_str[:10])]).date()
-                                break
-                            except ValueError:
-                                continue
-                        else:
+                        try:
+                            parsed_date = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+                        except ValueError:
                             continue
                     else:
                         parsed_date = date_str

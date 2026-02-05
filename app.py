@@ -476,24 +476,23 @@ def render_summary_page():
                         st.rerun()
                 with col3:
                     if st.button("Test API", key="test_api_btn"):
-                        # Test different base URLs
                         import httpx
                         from src.config import settings
-                        results = []
+
                         app_id = settings.chartex.app_id or "NOT SET"
                         app_token = settings.chartex.app_token or "NOT SET"
+                        headers = {"X-APP-ID": app_id, "X-APP-TOKEN": app_token, "Accept": "application/json"}
 
-                        for base in ["https://chartex.com", "https://api.chartex.com"]:
-                            url = f"{base}/external/v1/tiktok-sounds/"
-                            headers = {"X-APP-ID": app_id, "X-APP-TOKEN": app_token}
-                            try:
-                                with httpx.Client(timeout=15.0, follow_redirects=True) as client:
-                                    resp = client.get(url, headers=headers, params={"limit": 5})
-                                results.append(f"{base}: {resp.status_code}\n{resp.text[:300]}\n")
-                            except Exception as e:
-                                results.append(f"{base}: ERROR - {e}\n")
-
-                        st.code(f"App ID: {app_id[:8]}...\n\n" + "\n".join(results))
+                        # Test the sound stats endpoint
+                        url = f"https://api.chartex.com/external/v1/tiktok-sounds/{sound_id}/stats/tiktok-video-views/?mode=daily&limit_by_latest_days=3"
+                        try:
+                            with httpx.Client(timeout=15.0, follow_redirects=True) as client:
+                                resp = client.get(url, headers=headers)
+                            st.code(f"""API Test for Sound {sound_id}
+Status: {resp.status_code}
+Response: {resp.text[:300]}""")
+                        except Exception as e:
+                            st.error(f"Error: {e}")
             else:
                 st.error("Could not extract sound ID.")
 
