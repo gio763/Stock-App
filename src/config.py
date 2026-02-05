@@ -48,16 +48,21 @@ class SpotifySettings:
 @dataclass
 class ChartexSettings:
     """Chartex API settings for TikTok data."""
-    api_key_env_var: str = "CHARTEX_API_KEY"
+    app_id_env_var: str = "CHARTEX_APP_ID"
+    app_token_env_var: str = "CHARTEX_APP_TOKEN"
     api_base_url: str = "https://chartex.com/external/v1"
 
     @property
-    def api_key(self) -> Optional[str]:
-        return os.environ.get(self.api_key_env_var)
+    def app_id(self) -> Optional[str]:
+        return os.environ.get(self.app_id_env_var)
+
+    @property
+    def app_token(self) -> Optional[str]:
+        return os.environ.get(self.app_token_env_var)
 
     @property
     def configured(self) -> bool:
-        return bool(self.api_key)
+        return bool(self.app_id and self.app_token)
 
 
 @dataclass

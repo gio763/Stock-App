@@ -29,12 +29,20 @@ class ChartexClient:
         return settings.chartex.configured
 
     def _get_headers(self) -> dict:
-        """Get request headers with API key."""
-        api_key = settings.chartex.api_key
-        if not api_key:
-            raise ChartexAPIError("Chartex API key not configured. Set CHARTEX_API_KEY environment variable.")
+        """Get request headers with API credentials."""
+        app_id = settings.chartex.app_id
+        app_token = settings.chartex.app_token
+
+        if not app_id or not app_token:
+            raise ChartexAPIError(
+                "Chartex credentials not configured. "
+                "Set CHARTEX_APP_ID and CHARTEX_APP_TOKEN environment variables."
+            )
+
+        # Chartex uses App ID and Token for authentication
         return {
-            "Authorization": f"Bearer {api_key}",
+            "X-App-Id": app_id,
+            "X-App-Token": app_token,
             "Content-Type": "application/json",
         }
 
