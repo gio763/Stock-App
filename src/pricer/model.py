@@ -597,6 +597,9 @@ def analyze_deal(
     # SECTION 2: IRR-BASED RECOMMENDATIONS (10% and 15%)
     # =========================================================================
     # Max cost for target IRR (NO payback constraint)
+    # For Profit Split, need annual gross to properly calculate expense impact
+    annual_gross = [cf[2] for cf in base_cash_flows]  # gross_revenue per year
+
     target_irrs = [0.10, 0.15]
     irr_recommendations = []
 
@@ -608,6 +611,8 @@ def analyze_deal(
             deal_pct=label_share,
             advance_share_pct=inputs.advance_share,
             marketing_recoupable=inputs.marketing_recoupable,
+            deal_type=payback_deal_type,
+            annual_gross=annual_gross,
         )
 
         irr_recommendations.append(

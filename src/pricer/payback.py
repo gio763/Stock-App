@@ -538,15 +538,74 @@ def compute_irr_recommendation(
     deal_pct: float,
     advance_share_pct: float,
     marketing_recoupable: bool,
+    deal_type: Optional[DealType] = None,
+    annual_gross: Optional[List[float]] = None,  # Gross revenue by year (for profit split calc)
 ) -> IRRRecommendation:
     """
     Compute IRR-based recommendation (no payback constraint).
 
-    max_cost = PV of base cash flows at target IRR.
+    For Distribution and Royalty deals:
+        max_cost = PV of base cash flows at target IRR
+        (Conservative estimate - actual IRR will be higher due to recoupment)
+
+    For Profit Split deals:
+        max_cost = Iteratively solved so that actual IRR = target
+        (Accounts for expense deduction reducing net profit)
+
     recoup_week = informational payback timing.
     """
-    # Max cost for target IRR (using base cash flows)
-    max_cost = solve_max_cost_for_irr(target_irr, annual_cash_flows_base)
+    if deal_type == DealType.PROFIT_SPLIT and annual_gross is not None:
+        # For Profit Split, expenses reduce net profit permanently
+        # Need to iteratively find max_cost where actual IRR = target
+        #
+        # At investment X:
+        #   Year y expense = X × (gross_y / total_gross)
+        #   Year y net_profit = gross_y - expense_y
+        #   Year y label_cf = net_profit_y × deal_pct (label's share of net)
+        #
+        # Find X where IRR of label_cf series = target_irr
+
+        total_gross = sum(annual_gross)
+
+        # Binary search for the right investment level
+        cost_low = 0.0
+        cost_high = total_gross * deal_pct  # Upper bound: label's share of gross
+        tolerance = 100.0  # $100 tolerance
+        max_cost = 0.0
+
+        for _ in range(100):
+            cost_mid = (cost_low + cost_high) / 2
+
+            # Calculate actual cash flows at this cost
+            actual_cf = []
+            for gross_y in annual_gross:
+                expense_y = cost_mid * (gross_y / total_gross) if total_gross > 0 else 0
+                net_profit_y = max(0, gross_y - expense_y)
+                label_cf_y = net_profit_y * deal_pct
+                actual_cf.append(label_cf_y)
+
+            # Calculate IRR at this cost
+            test_irr = compute_annual_irr(cost_mid, actual_cf) if cost_mid > 0 else None
+
+            if test_irr is None:
+                # Can't achieve positive IRR, reduce cost
+                cost_high = cost_mid
+            elif test_irr > target_irr:
+                # IRR too high, can increase cost
+                cost_low = cost_mid
+                max_cost = cost_mid
+            else:
+                # IRR too low, reduce cost
+                cost_high = cost_mid
+
+            if cost_high - cost_low < tolerance:
+                break
+
+        # Use the found max_cost
+        max_cost = max_cost if max_cost > 0 else cost_low
+    else:
+        # For Distribution and Royalty, use base cash flows (conservative)
+        max_cost = solve_max_cost_for_irr(target_irr, annual_cash_flows_base)
 
     # Recoup week at this cost (informational)
     recoup_week = compute_recoup_week(
