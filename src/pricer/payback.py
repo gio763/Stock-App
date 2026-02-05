@@ -554,35 +554,49 @@ def compute_irr_recommendation(
 
     recoup_week = informational payback timing.
     """
-    if deal_type == DealType.PROFIT_SPLIT and annual_gross is not None:
-        # For Profit Split, expenses reduce net profit permanently
-        # Need to iteratively find max_cost where actual IRR = target
-        #
-        # At investment X:
-        #   Year y expense = X × (gross_y / total_gross)
-        #   Year y net_profit = gross_y - expense_y
-        #   Year y label_cf = net_profit_y × deal_pct (label's share of net)
-        #
-        # Find X where IRR of label_cf series = target_irr
+    # For ALL deal types, find the investment where actual IRR = target IRR
+    # This accounts for recoupment timing (Dist/Royalty) and expense deduction (Profit Split)
 
+    if annual_gross is not None and deal_type is not None:
         total_gross = sum(annual_gross)
+        artist_share = 1.0 - deal_pct
 
-        # Binary search for the right investment level
+        # Binary search for the investment that gives exactly target IRR
         cost_low = 0.0
-        cost_high = total_gross * deal_pct  # Upper bound: label's share of gross
+        # Upper bound: use total gross as a safe upper limit
+        # The binary search will find the right answer below this
+        cost_high = total_gross
+
         tolerance = 100.0  # $100 tolerance
         max_cost = 0.0
 
         for _ in range(100):
             cost_mid = (cost_low + cost_high) / 2
 
-            # Calculate actual cash flows at this cost
-            actual_cf = []
-            for gross_y in annual_gross:
-                expense_y = cost_mid * (gross_y / total_gross) if total_gross > 0 else 0
-                net_profit_y = max(0, gross_y - expense_y)
-                label_cf_y = net_profit_y * deal_pct
-                actual_cf.append(label_cf_y)
+            if deal_type == DealType.PROFIT_SPLIT:
+                # Profit Split: expenses reduce net profit before splitting
+                actual_cf = []
+                for gross_y in annual_gross:
+                    expense_y = cost_mid * (gross_y / total_gross) if total_gross > 0 else 0
+                    net_profit_y = max(0, gross_y - expense_y)
+                    label_cf_y = net_profit_y * deal_pct
+                    actual_cf.append(label_cf_y)
+            else:
+                # Distribution/Royalty: recoupment withheld from artist's share
+                actual_cf = []
+                remaining_recoup = cost_mid
+                for gross_y in annual_gross:
+                    label_base = gross_y * deal_pct
+                    artist_due = gross_y * artist_share
+
+                    if remaining_recoup > 0:
+                        withheld = min(artist_due, remaining_recoup)
+                        remaining_recoup -= withheld
+                        label_cf_y = label_base + withheld
+                    else:
+                        label_cf_y = label_base
+
+                    actual_cf.append(label_cf_y)
 
             # Calculate IRR at this cost
             test_irr = compute_annual_irr(cost_mid, actual_cf) if cost_mid > 0 else None
@@ -604,7 +618,7 @@ def compute_irr_recommendation(
         # Use the found max_cost
         max_cost = max_cost if max_cost > 0 else cost_low
     else:
-        # For Distribution and Royalty, use base cash flows (conservative)
+        # Fallback: use base cash flows (if no deal type info provided)
         max_cost = solve_max_cost_for_irr(target_irr, annual_cash_flows_base)
 
     # Recoup week at this cost (informational)
