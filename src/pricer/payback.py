@@ -59,16 +59,18 @@ def compute_weekly_cashflows(
     total_cost: float,
     advance_share_pct: float,
     marketing_recoupable: bool,
+    deal_type: Optional[DealType] = None,
 ) -> WeeklyCashFlowResult:
     """
-    Compute weekly cash flows with recoup waterfall.
+    Compute weekly cash flows with deal-type-specific recoup waterfall.
 
     Args:
         weekly_gross_series: Weekly gross revenues (520 weeks for 10 years)
-        deal_pct: Label's share of gross (e.g., 0.25)
+        deal_pct: Label's share (meaning varies by deal type)
         total_cost: Total deal cost (advance + marketing)
         advance_share_pct: Fraction of cost that is advance (0-1)
         marketing_recoupable: Whether marketing is recoupable
+        deal_type: Type of deal (affects recoupment mechanics)
 
     Returns:
         WeeklyCashFlowResult with all cash flow data
@@ -83,6 +85,7 @@ def compute_weekly_cashflows(
         recoupable_amount = advance
 
     artist_share = 1.0 - deal_pct
+    total_gross = sum(weekly_gross_series)
 
     weekly_label_cash_in = []
     weekly_artist_pay = []
@@ -97,22 +100,87 @@ def compute_weekly_cashflows(
     for week_idx, gross in enumerate(weekly_gross_series):
         week_num = week_idx + 1
 
-        # Base split
-        label_base = gross * deal_pct
-        artist_due = gross * artist_share
+        if deal_type == DealType.ROYALTY:
+            # ROYALTY: Label keeps 80% + withholds 20% during recoup
+            # Recoupment at artist's royalty rate
+            label_base = gross * deal_pct  # Label's share (e.g., 80%)
+            artist_royalty = gross * artist_share  # Artist's royalty (e.g., 20%)
 
-        # Recoup waterfall: label withholds from artist pay
-        if remaining_recoup > 0:
-            withheld = min(artist_due, remaining_recoup)
-            remaining_recoup -= withheld
-            label_cash_in = label_base + withheld
-            artist_pay = artist_due - withheld
-
-            if remaining_recoup <= 0 and recoup_week is None:
+            if remaining_recoup <= 0:
+                label_cash_in = label_base
+                artist_pay = artist_royalty
+            elif artist_royalty <= remaining_recoup:
+                remaining_recoup -= artist_royalty
+                label_cash_in = label_base + artist_royalty  # 100%
+                artist_pay = 0.0
+                if remaining_recoup <= 0 and recoup_week is None:
+                    recoup_week = week_num
+            else:
+                # Mid-week recoup
+                label_cash_in = label_base + remaining_recoup
+                artist_pay = artist_royalty - remaining_recoup
+                remaining_recoup = 0.0
                 recoup_week = week_num
+
+        elif deal_type == DealType.DISTRIBUTION:
+            # DISTRIBUTION: Label gets 100% of gross during recoup
+            # After recoup: label gets deal_pct (e.g., 30%)
+            if remaining_recoup <= 0:
+                label_cash_in = gross * deal_pct
+                artist_pay = gross * artist_share
+            elif gross <= remaining_recoup:
+                remaining_recoup -= gross
+                label_cash_in = gross  # 100%
+                artist_pay = 0.0
+                if remaining_recoup <= 0 and recoup_week is None:
+                    recoup_week = week_num
+            else:
+                # Mid-week recoup: label takes what's needed, splits rest
+                recoup_portion = remaining_recoup
+                remainder = gross - remaining_recoup
+                remaining_recoup = 0.0
+                recoup_week = week_num
+                label_cash_in = recoup_portion + (remainder * deal_pct)
+                artist_pay = remainder * artist_share
+
+        elif deal_type == DealType.PROFIT_SPLIT:
+            # PROFIT SPLIT: Expenses reduce gross to net, recoup from net
+            expense = total_cost * (gross / total_gross) if total_gross > 0 else 0
+            net_revenue = max(0, gross - expense)
+
+            if remaining_recoup <= 0:
+                label_cash_in = net_revenue * deal_pct
+                artist_pay = net_revenue * artist_share
+            elif net_revenue <= remaining_recoup:
+                remaining_recoup -= net_revenue
+                label_cash_in = net_revenue  # 100% of net
+                artist_pay = 0.0
+                if remaining_recoup <= 0 and recoup_week is None:
+                    recoup_week = week_num
+            else:
+                # Mid-week recoup
+                recoup_portion = remaining_recoup
+                remainder = net_revenue - remaining_recoup
+                remaining_recoup = 0.0
+                recoup_week = week_num
+                label_cash_in = recoup_portion + (remainder * deal_pct)
+                artist_pay = remainder * artist_share
+
         else:
-            label_cash_in = label_base
-            artist_pay = artist_due
+            # Default/legacy: withhold from artist share (like Royalty)
+            label_base = gross * deal_pct
+            artist_due = gross * artist_share
+
+            if remaining_recoup > 0:
+                withheld = min(artist_due, remaining_recoup)
+                remaining_recoup -= withheld
+                label_cash_in = label_base + withheld
+                artist_pay = artist_due - withheld
+                if remaining_recoup <= 0 and recoup_week is None:
+                    recoup_week = week_num
+            else:
+                label_cash_in = label_base
+                artist_pay = artist_due
 
         weekly_label_cash_in.append(label_cash_in)
         weekly_artist_pay.append(artist_pay)
@@ -148,14 +216,16 @@ def compute_recoup_week(
     total_cost: float,
     advance_share_pct: float,
     marketing_recoupable: bool,
+    deal_type: Optional[DealType] = None,
 ) -> Optional[int]:
     """
-    Compute the week when cumulative label cash-in reaches total_cost.
+    Compute the week when recoupment completes.
 
-    This is the payback week - when the label has recovered their investment.
+    This is when the recoupable amount (advance, or full cost if marketing_recoupable)
+    has been paid off from the revenue stream.
 
     Returns:
-        Week number (1-indexed) when payback occurs, or None if never
+        Week number (1-indexed) when recoup completes, or None if never
     """
     result = compute_weekly_cashflows(
         weekly_gross_series=weekly_gross_series,
@@ -163,17 +233,12 @@ def compute_recoup_week(
         total_cost=total_cost,
         advance_share_pct=advance_share_pct,
         marketing_recoupable=marketing_recoupable,
+        deal_type=deal_type,
     )
 
-    # Find week when cumulative label cash-in >= total_cost
-    cum_cash_in = 0.0
-    for week_idx, cash_in in enumerate(result.weekly_label_cash_in):
-        week_num = week_idx + 1
-        cum_cash_in += cash_in
-        if cum_cash_in >= total_cost:
-            return week_num
-
-    return None  # Never reaches payback
+    # Return the recoup week calculated by the weekly cashflows
+    # (which tracks when the recoupable amount is fully paid off)
+    return result.recoup_week
 
 
 def compute_payback_max_cost(
@@ -188,16 +253,13 @@ def compute_payback_max_cost(
     Compute maximum deal cost that can be recouped by the horizon.
 
     The calculation varies by deal type:
-    - DISTRIBUTION: Recoup from artist's share (1 - deal_pct) × gross
-    - ROYALTY: Recoup from artist's royalty only. For royalty deals,
-               deal_pct is label's share (e.g., 0.80), so recoup capacity
-               is (1 - deal_pct) × gross = royalty_rate × gross
-    - PROFIT_SPLIT: Expenses deducted from gross before split, so full
-                    gross is available for expense deduction
+    - DISTRIBUTION: Label gets 100% of gross until recouped
+    - ROYALTY: Label keeps their share + withholds artist royalty for recoup
+    - PROFIT_SPLIT: Expenses reduce gross to net, then recoup from net
 
     Args:
         weekly_gross_series: Weekly gross revenues
-        deal_pct: Label's share (e.g., 0.25 for distribution, 0.80 for royalty)
+        deal_pct: Label's share (e.g., 0.30 for distribution, 0.80 for royalty)
         advance_share_pct: Fraction that is advance
         marketing_recoupable: Whether marketing is recoupable
         payback_horizon_weeks: Target week (default 78 = 18 months)
@@ -209,29 +271,24 @@ def compute_payback_max_cost(
     horizon_weeks = min(payback_horizon_weeks, len(weekly_gross_series))
     total_gross_in_horizon = sum(weekly_gross_series[:horizon_weeks])
 
-    # Calculate recoupment capacity based on deal type
-    if deal_type == DealType.PROFIT_SPLIT:
-        # Profit split: expenses come off gross before split
-        # Max expense = total gross (though this would leave nothing to split)
-        # More realistically, cap at gross to ensure SOME profit
+    # Calculate theoretical max recoupment capacity (upper bound for search)
+    if deal_type == DealType.DISTRIBUTION:
+        # Distribution: 100% of gross goes to recoup
         recoup_capacity = total_gross_in_horizon
     elif deal_type == DealType.ROYALTY:
         # Royalty: only artist's royalty portion available for recoup
-        # deal_pct = label's share (e.g., 0.80), royalty = 1 - 0.80 = 0.20
         artist_royalty_rate = 1.0 - deal_pct
         recoup_capacity = total_gross_in_horizon * artist_royalty_rate
+    elif deal_type == DealType.PROFIT_SPLIT:
+        # Profit split: expenses reduce gross, so max is ~50% of gross
+        # (at 100% expense, net = 0, so can't recoup anything)
+        recoup_capacity = total_gross_in_horizon * 0.5
     else:
-        # Distribution (default): recoup from artist's share
+        # Default: artist's share
         artist_share = 1.0 - deal_pct
         recoup_capacity = total_gross_in_horizon * artist_share
 
-    # For profit split, we can return recoup capacity directly
-    # (expenses are deducted, not withheld)
-    if deal_type == DealType.PROFIT_SPLIT:
-        return recoup_capacity
-
-    # For distribution and royalty, use binary search to find exact max
-    # that pays back by the horizon (accounts for weekly timing)
+    # Use binary search to find exact max that pays back by the horizon
     cost_low = 0.0
     cost_high = recoup_capacity
     tolerance = 1.0  # $1 tolerance
@@ -246,6 +303,7 @@ def compute_payback_max_cost(
             total_cost=cost_mid,
             advance_share_pct=advance_share_pct,
             marketing_recoupable=marketing_recoupable,
+            deal_type=deal_type,
         )
 
         if payback_week is not None and payback_week <= payback_horizon_weeks:
@@ -499,6 +557,7 @@ def compute_payback_recommendation(
         total_cost=max_cost,
         advance_share_pct=advance_share_pct,
         marketing_recoupable=marketing_recoupable,
+        deal_type=deal_type,
     )
 
     # Compute implied IRR using annual cash flows with recoup
@@ -509,6 +568,7 @@ def compute_payback_recommendation(
         total_cost=max_cost,
         advance_share_pct=advance_share_pct,
         marketing_recoupable=marketing_recoupable,
+        deal_type=deal_type,
     )
 
     # Convert to annual for IRR calculation
@@ -674,6 +734,7 @@ def compute_irr_recommendation(
         total_cost=max_cost,
         advance_share_pct=advance_share_pct,
         marketing_recoupable=marketing_recoupable,
+        deal_type=deal_type,
     )
 
     # NPV at 10% discount rate
