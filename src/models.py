@@ -88,3 +88,33 @@ class TrackData:
     weekly_global_audio_streams: int = 0
     weekly_us_video_streams: int = 0
     weeks_since_release: int = 0
+
+
+@dataclass
+class TikTokSound:
+    """TikTok sound/audio data."""
+    sound_id: str
+    name: str
+    artist_name: Optional[str] = None
+    tiktok_url: Optional[str] = None
+    # Creates (videos using this sound)
+    total_creates: int = 0
+    creates_7d: int = 0
+    creates_24h: int = 0
+    # Views (total views on videos using this sound)
+    total_views: int = 0
+    views_7d: int = 0
+    views_24h: int = 0
+    # Time series data
+    views_history: List[TimeSeriesPoint] = field(default_factory=list)
+    creates_history: List[TimeSeriesPoint] = field(default_factory=list)
+
+
+@dataclass
+class TrackedSound:
+    """A TikTok sound being tracked."""
+    sound_id: str
+    name: str
+    artist_name: Optional[str] = None
+    tiktok_url: Optional[str] = None
+    added_at: Optional[str] = None

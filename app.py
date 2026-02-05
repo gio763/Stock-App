@@ -24,7 +24,7 @@ from src.snowflake_client import snowflake_client
 from src.spotify_client import spotify_client
 from src.storage import load_tracked_artists, add_tracked_artist, remove_tracked_artist
 from src.data_cache import data_cache
-from src.models import ArtistMetrics, ArtistSummary, TimeSeriesPoint
+from src.models import ArtistMetrics, ArtistSummary, TimeSeriesPoint, TikTokSound
 from src.deal_analysis import (
     DealAnalyzer, DealAnalysisRequest, DealAnalysisResult,
     get_analyzer, AVAILABLE_GENRES
@@ -33,6 +33,8 @@ from src.deal_storage import (
     save_deal_analysis, load_all_analyses, get_analyses_for_artist,
     delete_analysis, get_analyses_summary
 )
+from src.chartex_client import chartex_client
+from src.sound_storage import load_tracked_sounds, add_tracked_sound, remove_tracked_sound
 
 st.set_page_config(page_title="Artist Stock App", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 
@@ -301,9 +303,13 @@ def render_summary_page():
     tracked = load_tracked_artists()
     st.markdown(f'<div class="page-subtitle">{len(tracked)} artists tracked</div>', unsafe_allow_html=True)
 
-    # View Deals button
-    col1, col2 = st.columns([3, 1])
+    # Navigation buttons
+    col1, col2, col3 = st.columns([2, 1, 1])
     with col2:
+        if st.button("🎵 TikTok Sounds", key="view_sounds_btn", use_container_width=True):
+            st.session_state.page = "tiktok_sounds"
+            st.rerun()
+    with col3:
         if st.button("View Deals", key="view_deals_btn", use_container_width=True):
             st.session_state.page = "deals"
             st.rerun()
@@ -1373,6 +1379,231 @@ def render_deals_page():
                     st.rerun()
 
 
+def render_tiktok_sounds_page():
+    """Render the TikTok sounds tracking page."""
+    st.markdown('<div class="page-title">TikTok Sounds</div>', unsafe_allow_html=True)
+
+    tracked_sounds = load_tracked_sounds()
+    st.markdown(f'<div class="page-subtitle">{len(tracked_sounds)} sounds tracked</div>', unsafe_allow_html=True)
+
+    # Back button
+    if st.button("← Back to Artists", key="back_from_sounds"):
+        st.session_state.page = "summary"
+        st.rerun()
+
+    st.markdown("---")
+
+    # Add Sound section
+    with st.expander("➕ Add TikTok Sound"):
+        st.caption("Enter a TikTok sound ID or URL. You must first add the sound to tracking in the Chartex dashboard.")
+
+        sound_input = st.text_input(
+            "Sound ID or TikTok URL",
+            placeholder="e.g., 7171140178143266818 or https://tiktok.com/music/...",
+            key="add_sound_input"
+        )
+
+        sound_name = st.text_input(
+            "Sound Name (optional)",
+            placeholder="e.g., Artist - Song Title",
+            key="add_sound_name"
+        )
+
+        if sound_input:
+            # Extract sound ID from URL if needed
+            import re
+            sound_id = None
+
+            # Try to extract from URL patterns
+            patterns = [
+                r"tiktok\.com/music/[^/]+-(\d+)",
+                r"tiktok\.com/music/(\d+)",
+                r"^(\d+)$",  # Just the ID
+            ]
+
+            for pattern in patterns:
+                match = re.search(pattern, sound_input)
+                if match:
+                    sound_id = match.group(1)
+                    break
+
+            if sound_id:
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.success(f"Sound ID: {sound_id}")
+                with col2:
+                    if st.button("Add Sound", key="add_sound_btn"):
+                        name = sound_name if sound_name else f"TikTok Sound {sound_id[-8:]}"
+                        add_tracked_sound(
+                            sound_id=sound_id,
+                            name=name,
+                        )
+                        st.rerun()
+            else:
+                st.error("Could not extract sound ID. Please enter a valid TikTok sound URL or ID.")
+
+    st.markdown("---")
+
+    # Display tracked sounds
+    if tracked_sounds:
+        for sound in tracked_sounds:
+            # Fetch data from Chartex
+            try:
+                sound_data = chartex_client.get_sound_data(sound.sound_id, lookback_days=30)
+            except Exception as e:
+                sound_data = TikTokSound(
+                    sound_id=sound.sound_id,
+                    name=sound.name,
+                    total_views=0,
+                    total_creates=0,
+                )
+
+            # Calculate change indicators
+            views_change = sound_data.views_7d
+            creates_change = sound_data.creates_7d
+            is_positive = views_change >= 0
+
+            col1, col2 = st.columns([20, 1])
+            with col1:
+                card_html = f'''
+                <div class="artist-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; gap: 16px;">
+                        <div style="flex: 1;">
+                            <div style="font-size: 17px; font-weight: 600; color: #ffffff;">{sound.name or sound_data.name}</div>
+                            <div style="font-size: 13px; color: #8e8e93;">ID: {sound.sound_id[-12:]}</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="font-size: 17px; font-weight: 600; color: #ffffff;">{format_number(sound_data.total_views)} views</div>
+                            <div style="font-size: 11px; color: #8e8e93;">{format_number(sound_data.total_creates)} creates</div>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 20px; margin-top: 12px; font-size: 12px; color: #8e8e93;">
+                        <span>📈 7d views: <span style="color: {'#34c759' if views_change > 0 else '#ff3b30' if views_change < 0 else '#8e8e93'};">+{format_number(views_change)}</span></span>
+                        <span>🎬 7d creates: <span style="color: {'#34c759' if creates_change > 0 else '#ff3b30' if creates_change < 0 else '#8e8e93'};">+{format_number(creates_change)}</span></span>
+                        <span>24h: +{format_number(sound_data.views_24h)} views</span>
+                    </div>
+                </div>
+                '''
+                st.markdown(card_html, unsafe_allow_html=True)
+
+                # View detail button
+                if st.button(f"📊 View Details", key=f"view_sound_{sound.sound_id}", use_container_width=True):
+                    st.session_state.selected_sound = sound.sound_id
+                    st.session_state.page = "sound_detail"
+                    st.rerun()
+
+            with col2:
+                st.markdown("<div style='height: 70px'></div>", unsafe_allow_html=True)
+                if st.button("🗑️", key=f"del_sound_{sound.sound_id}"):
+                    remove_tracked_sound(sound.sound_id)
+                    st.rerun()
+    else:
+        st.info("No sounds tracked yet. Add a TikTok sound using the section above.")
+        st.caption("Note: Sounds must first be added to tracking in the Chartex dashboard before data will appear.")
+
+
+def render_sound_detail_page():
+    """Render the TikTok sound detail page."""
+    sound_id = st.session_state.get("selected_sound")
+    if not sound_id:
+        st.session_state.page = "tiktok_sounds"
+        st.rerun()
+        return
+
+    if st.button("← Back to Sounds", key="back_from_sound_detail"):
+        st.session_state.page = "tiktok_sounds"
+        st.rerun()
+
+    # Get sound data
+    tracked_sounds = load_tracked_sounds()
+    sound_info = next((s for s in tracked_sounds if s.sound_id == sound_id), None)
+
+    try:
+        sound_data = chartex_client.get_sound_data(sound_id, lookback_days=90)
+    except Exception as e:
+        st.error(f"Failed to load sound data: {e}")
+        return
+
+    # Header
+    sound_name = sound_info.name if sound_info else sound_data.name
+    st.markdown(f'<div class="page-title">{sound_name}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="page-subtitle">Sound ID: {sound_id}</div>', unsafe_allow_html=True)
+
+    # Key metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.markdown(f'''<div class="stat-card">
+            <div class="stat-label">Total Views</div>
+            <div class="stat-value">{format_number(sound_data.total_views)}</div>
+        </div>''', unsafe_allow_html=True)
+    with col2:
+        st.markdown(f'''<div class="stat-card">
+            <div class="stat-label">Total Creates</div>
+            <div class="stat-value">{format_number(sound_data.total_creates)}</div>
+        </div>''', unsafe_allow_html=True)
+    with col3:
+        st.markdown(f'''<div class="stat-card">
+            <div class="stat-label">7-Day Views</div>
+            <div class="stat-value stat-change-positive">+{format_number(sound_data.views_7d)}</div>
+        </div>''', unsafe_allow_html=True)
+    with col4:
+        st.markdown(f'''<div class="stat-card">
+            <div class="stat-label">7-Day Creates</div>
+            <div class="stat-value stat-change-positive">+{format_number(sound_data.creates_7d)}</div>
+        </div>''', unsafe_allow_html=True)
+
+    # Time period selector
+    periods = ["1W", "1M", "3M"]
+    if "sound_period" not in st.session_state:
+        st.session_state.sound_period = "1M"
+
+    selected_period = st.radio(
+        "Period",
+        periods,
+        index=periods.index(st.session_state.sound_period),
+        horizontal=True,
+        label_visibility="collapsed",
+        key="sound_period_radio"
+    )
+    if selected_period != st.session_state.sound_period:
+        st.session_state.sound_period = selected_period
+        st.rerun()
+
+    # Filter data by period
+    period_days = {"1W": 7, "1M": 30, "3M": 90}.get(selected_period, 30)
+    cutoff_date = date.today() - timedelta(days=period_days)
+
+    views_filtered = [p for p in sound_data.views_history if p.date >= cutoff_date]
+    creates_filtered = [p for p in sound_data.creates_history if p.date >= cutoff_date]
+
+    # Views chart
+    st.markdown('<div class="section-header">Daily Views</div>', unsafe_allow_html=True)
+    if views_filtered:
+        st.plotly_chart(
+            create_chart(views_filtered, height=250, color="#ff3b30"),
+            use_container_width=True,
+            config={'displayModeBar': False}
+        )
+    else:
+        st.info("No view data available for this period. Make sure the sound is being tracked in Chartex.")
+
+    # Creates chart
+    st.markdown('<div class="section-header">Daily Creates</div>', unsafe_allow_html=True)
+    if creates_filtered:
+        st.plotly_chart(
+            create_chart(creates_filtered, height=250, color="#007aff"),
+            use_container_width=True,
+            config={'displayModeBar': False}
+        )
+    else:
+        st.info("No creates data available for this period.")
+
+    # TikTok link
+    st.markdown("---")
+    tiktok_url = sound_info.tiktok_url if sound_info else f"https://www.tiktok.com/music/original-sound-{sound_id}"
+    st.markdown(f"[Open in TikTok]({tiktok_url})")
+
+
 def main():
     if "page" not in st.session_state:
         st.session_state.page = "summary"
@@ -1385,6 +1616,10 @@ def main():
         render_detail_page()
     elif st.session_state.page == "deals":
         render_deals_page()
+    elif st.session_state.page == "tiktok_sounds":
+        render_tiktok_sounds_page()
+    elif st.session_state.page == "sound_detail":
+        render_sound_detail_page()
     else:
         render_summary_page()
 

@@ -46,10 +46,26 @@ class SpotifySettings:
 
 
 @dataclass
+class ChartexSettings:
+    """Chartex API settings for TikTok data."""
+    api_key_env_var: str = "CHARTEX_API_KEY"
+    api_base_url: str = "https://chartex.com/external/v1"
+
+    @property
+    def api_key(self) -> Optional[str]:
+        return os.environ.get(self.api_key_env_var)
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.api_key)
+
+
+@dataclass
 class Settings:
     """Application settings."""
     snowflake: SnowflakeSettings = field(default_factory=SnowflakeSettings)
     spotify: SpotifySettings = field(default_factory=SpotifySettings)
+    chartex: ChartexSettings = field(default_factory=ChartexSettings)
 
 
 def load_settings(config_path: Optional[Path] = None) -> Settings:
@@ -65,10 +81,12 @@ def load_settings(config_path: Optional[Path] = None) -> Settings:
 
     snowflake_data = data.get("snowflake", {})
     spotify_data = data.get("spotify", {})
+    chartex_data = data.get("chartex", {})
 
     return Settings(
         snowflake=SnowflakeSettings(**snowflake_data),
         spotify=SpotifySettings(**spotify_data),
+        chartex=ChartexSettings(**chartex_data),
     )
 
 
